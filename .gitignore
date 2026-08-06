@@ -1,32 +1,49 @@
-# Python
+# ─── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
 
-# Virtual environment
+# ─── Virtual Environment ──────────────────────────────────────────────────────
 venv/
 .venv/
+env/
 
-# Environment variables
+# ─── Environment Variables (NEVER commit your real keys) ─────────────────────
 .env
 
-# SQLite database
+# ─── SQLite Database (auto-created at runtime) ───────────────────────────────
 assistant.db
 
-# Audio
+# ─── Generated Audio Files ───────────────────────────────────────────────────
 audio/
-response.mp3
+*.mp3
+*.wav
 
-# Node
+# ─── Frontend: Node & Build ───────────────────────────────────────────────────
 frontend/node_modules/
-
-# Vite
 frontend/dist/
+frontend/.env
+frontend/.env.local
 
-# VS Code
+# ─── Editor / IDE ─────────────────────────────────────────────────────────────
 .vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 
-# OS
+# ─── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+*.log
+*.bak

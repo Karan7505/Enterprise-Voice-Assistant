@@ -1,12 +1,6 @@
 import json
 
 from app.core.database import get_connection
-from app.prompts.chat_prompt import build_prompt
-from app.services.database_chat_history import (
-    add_message,
-    get_messages,
-)
-from app.services.llm_service import generate
 
 DEFAULT_SESSION_ID = "default"
 
@@ -18,14 +12,40 @@ def get_all_memories(
 
     rows = conn.execute(
         """
-        SELECT
-            memory_key,
-            memory_value
+        SELECT memory_key, memory_value
         FROM memories
         WHERE session_id = ?
-        ORDER BY updated_at DESC
         """,
         (session_id,),
+    ).fetchall()
+
+    conn.close()
+
+    return {
+        row["memory_key"]: row["memory_value"]
+        for row in rows
+    }
+
+
+def get_memories_by_keys(
+    keys: list[str],
+    session_id: str = DEFAULT_SESSION_ID,
+) -> dict:
+    if not keys:
+        return {}
+
+    conn = get_connection()
+
+    placeholders = ",".join("?" * len(keys))
+
+    rows = conn.execute(
+        f"""
+        SELECT memory_key, memory_value
+        FROM memories
+        WHERE session_id = ?
+        AND memory_key IN ({placeholders})
+        """,
+        [session_id] + keys,
     ).fetchall()
 
     conn.close()
@@ -83,56 +103,16 @@ def extract_json(text: str) -> dict:
     if text.endswith("```"):
         text = text[:-3]
 
-    text = text.strip()
-
-    return json.loads(text)
+    return json.loads(text.strip())
 
 
-def process_message(
-    message: str,
+def clear_memories(
     session_id: str = DEFAULT_SESSION_ID,
 ):
-    memories = get_all_memories(session_id)
-
-    history = get_messages(session_id)
-
-    history_text = "\n".join(
-        f"{item.role}: {item.content}"
-        for item in history
+    conn = get_connection()
+    conn.execute(
+        "DELETE FROM memories WHERE session_id = ?",
+        (session_id,),
     )
-
-    prompt = build_prompt(
-        memories=memories,
-        history=history_text,
-        message=message,
-    )
-
-    raw_response = generate(prompt)
-
-    data = extract_json(raw_response)
-
-    reply = data.get("reply", "")
-
-    new_memories = data.get(
-        "memories",
-        {},
-    )
-
-    add_message(
-        "user",
-        message,
-        session_id,
-    )
-
-    add_message(
-        "assistant",
-        reply,
-        session_id,
-    )
-
-    save_memories(
-        new_memories,
-        session_id,
-    )
-
-    return reply
+    conn.commit()
+    conn.close()

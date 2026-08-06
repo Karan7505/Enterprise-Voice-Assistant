@@ -1,24 +1,49 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
 
-node_modules
-dist
-dist-ssr
-*.local
+# ─── Virtual Environment ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
+# ─── Environment Variables (NEVER commit your real keys) ─────────────────────
+.env
+
+# ─── SQLite Database (auto-created at runtime) ───────────────────────────────
+assistant.db
+
+# ─── Generated Audio Files ───────────────────────────────────────────────────
+audio/
+*.mp3
+*.wav
+
+# ─── Frontend: Node & Build ───────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# ─── Editor / IDE ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# ─── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+*.log
+*.bak

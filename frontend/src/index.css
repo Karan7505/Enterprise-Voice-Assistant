@@ -1,5 +1,75 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg-gradient: radial-gradient(circle at 15% 15%, #0f172a 0%, #090d16 50%, #030712 100%);
+  --glass-bg: rgba(30, 41, 59, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-hover: rgba(51, 65, 85, 0.6);
+  --primary-accent: #3b82f6;
+  --primary-glow: rgba(59, 130, 246, 0.4);
+  --secondary-accent: #8b5cf6;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --user-msg-bg: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  --ai-msg-bg: rgba(30, 41, 59, 0.85);
+  --memory-card-bg: rgba(15, 23, 42, 0.6);
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 8px;
+  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  --shadow-accent: 0 0 20px rgba(59, 130, 246, 0.3);
+}
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
+
+body {
+  background: var(--bg-gradient);
+  color: var(--text-main);
+  font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+/* Pulse & Glow Animations */
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(59, 130, 246, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(139, 92, 246, 0.7);
+  }
+}
+
+@keyframes floatWave {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}

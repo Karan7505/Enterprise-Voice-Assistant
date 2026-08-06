@@ -41,3 +41,13 @@ def get_messages(session_id: str = DEFAULT_SESSION_ID) -> list[ChatMessage]:
         )
         for row in rows
     ]
+
+
+def clear_messages(session_id: str = DEFAULT_SESSION_ID):
+    conn = get_connection()
+    conn.execute(
+        "DELETE FROM messages WHERE session_id = ?",
+        (session_id,),
+    )
+    conn.commit()
+    conn.close()

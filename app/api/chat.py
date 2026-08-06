@@ -4,7 +4,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.services.memory_service import process_message
+from app.services.session_service import process_message, clear_session, get_session
+from app.services.memory_service import get_all_memories
+from app.services.database_chat_history import get_messages
 from app.services.llm_service import LLMError
 from app.services.tts_service import generate_speech
 
@@ -16,33 +18,77 @@ DEFAULT_SESSION_ID = "default"
 
 class ChatRequest(BaseModel):
     message: str
+    session_id: str = DEFAULT_SESSION_ID
 
 
 class ChatResponse(BaseModel):
     reply: str
     audio_url: str
+    memories: dict
 
 
 @router.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
+    session_id = request.session_id or DEFAULT_SESSION_ID
     try:
         reply = process_message(
             request.message,
-            DEFAULT_SESSION_ID,
+            session_id,
         )
-
     except LLMError as e:
         raise HTTPException(
             status_code=503,
             detail=str(e),
         )
 
-    filename = generate_speech(reply)
+    try:
+        filename = generate_speech(reply)
+        audio_url = f"/audio/{filename}"
+    except Exception as e:
+        print(f"TTS generation error: {e}")
+        audio_url = ""
+
+    memories = get_all_memories(session_id)
 
     return ChatResponse(
         reply=reply,
-        audio_url=f"/audio/{filename}",
+        audio_url=audio_url,
+        memories=memories,
     )
+
+
+@router.get("/memories")
+def memories(session_id: str = DEFAULT_SESSION_ID):
+    return {"memories": get_all_memories(session_id)}
+
+
+@router.get("/history")
+def history(session_id: str = DEFAULT_SESSION_ID):
+    messages = get_messages(session_id)
+    return {
+        "messages": [
+            {
+                "sender": "You" if msg.role == "user" else "AI",
+                "text": msg.content,
+            }
+            for msg in messages
+        ]
+    }
+
+
+@router.post("/clear")
+def clear(session_id: str = DEFAULT_SESSION_ID):
+    clear_session(session_id)
+    return {"status": "cleared", "session_id": session_id}
+
+
+@router.get("/status")
+def status():
+    return {
+        "status": "online",
+        "llm_engine": "Gemini 2.0 / Flash",
+        "tts_engine": "ElevenLabs",
+    }
 
 
 @router.get("/audio/{filename}")
