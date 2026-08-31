@@ -3,8 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.chat import router as chat_router
 from app.core.database import initialize_database
+from app.services.tts_service import cleanup_old_audio_files
 
 initialize_database()
+cleanup_old_audio_files()
 
 app = FastAPI()
 

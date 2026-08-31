@@ -1,9 +1,34 @@
 import uuid
+import time
+import os
 from pathlib import Path
 from app.core.config import settings
 
 AUDIO_DIR = Path("audio")
 AUDIO_DIR.mkdir(exist_ok=True)
+
+# Default: delete audio files older than 1 hour (3600 seconds)
+AUDIO_MAX_AGE_SECONDS = int(os.getenv("AUDIO_MAX_AGE_SECONDS", "3600"))
+
+
+def cleanup_old_audio_files(max_age_seconds: int = AUDIO_MAX_AGE_SECONDS):
+    """
+    Deletes .mp3 files in the audio directory that are older than max_age_seconds.
+    Keeps files temporarily for browser playback while preventing disk buildup.
+    """
+    now = time.time()
+    if not AUDIO_DIR.exists():
+        return
+
+    for file in AUDIO_DIR.glob("*.mp3"):
+        try:
+            if file.is_file():
+                file_age = now - file.stat().st_mtime
+                if file_age > max_age_seconds:
+                    file.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"[Audio Cleanup Error for {file.name}]: {e}")
+
 
 
 def generate_speech_elevenlabs(text: str, filepath: Path):
@@ -56,6 +81,9 @@ def generate_speech_gtts(text: str, filepath: Path):
 
 
 def generate_speech(text: str) -> str:
+    # Automatically clean up audio files older than 1 hour (3600 seconds)
+    cleanup_old_audio_files()
+
     filename = f"{uuid.uuid4().hex}.mp3"
     filepath = AUDIO_DIR / filename
 

@@ -13,30 +13,42 @@ function App() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
   const [memories, setMemories] = useState({});
+  const [statusInfo, setStatusInfo] = useState({
+    llm_engine: "Multi-Provider AI",
+    tts_engine: "Voice Engine",
+  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const audioRef = useRef(null);
 
-  // Load chat history & memories on mount
+  // Load chat history, memories & engine status on mount
   useEffect(() => {
-    fetchHistoryAndMemories();
+    fetchInitialData();
   }, []);
 
-  const fetchHistoryAndMemories = async () => {
+  const fetchInitialData = async () => {
     try {
-      const [histRes, memRes] = await Promise.all([
-        axios.get(`${API_BASE}/history`),
-        axios.get(`${API_BASE}/memories`),
+      const [histRes, memRes, statusRes] = await Promise.all([
+        axios.get(`${API_BASE}/history`).catch(() => ({ data: { messages: [] } })),
+        axios.get(`${API_BASE}/memories`).catch(() => ({ data: { memories: {} } })),
+        axios.get(`${API_BASE}/status`).catch(() => ({ data: {} })),
       ]);
+
       if (histRes.data && histRes.data.messages) {
         setMessages(histRes.data.messages);
       }
       if (memRes.data && memRes.data.memories) {
         setMemories(memRes.data.memories);
       }
+      if (statusRes.data && statusRes.data.llm_engine) {
+        setStatusInfo({
+          llm_engine: statusRes.data.llm_engine,
+          tts_engine: statusRes.data.tts_engine,
+        });
+      }
     } catch (err) {
-      console.error("Failed to load initial history or memories", err);
+      console.error("Failed to load initial assistant data", err);
     }
   };
 
@@ -138,20 +150,33 @@ function App() {
     }
   };
 
-  const handleClearSession = async () => {
-    if (!window.confirm("Are you sure you want to reset all conversation history and extracted memories?")) {
+  // Task 1: Clear only conversation history (preserves long-term memories)
+  const handleClearChat = async () => {
+    if (!window.confirm("Clear conversation history? Your saved long-term memories will be preserved.")) {
       return;
     }
     try {
-      await axios.post(`${API_BASE}/clear`);
+      await axios.post(`${API_BASE}/clear-chat`);
       setMessages([]);
-      setMemories({});
       if (audioRef.current) {
         audioRef.current.pause();
       }
       setIsPlaying(false);
     } catch (err) {
-      console.error("Failed to clear session", err);
+      console.error("Failed to clear chat history", err);
+    }
+  };
+
+  // Task 1: Reset only long-term memories (preserves active chat messages)
+  const handleClearMemories = async () => {
+    if (!window.confirm("Are you sure you want to delete all long-term memories? Your chat history will be preserved.")) {
+      return;
+    }
+    try {
+      await axios.post(`${API_BASE}/clear-memories`);
+      setMemories({});
+    } catch (err) {
+      console.error("Failed to reset memories", err);
     }
   };
 
@@ -164,13 +189,20 @@ function App() {
             <div className="brand-info">
               <h1>Enterprise Voice Assistant</h1>
               <div className="brand-subtitle">
-                <span>Gemini 2.0 & ElevenLabs</span>
+                <span>{statusInfo.llm_engine}</span>
                 <span className="engine-tag">Active</span>
               </div>
             </div>
           </div>
 
           <div className="header-actions">
+            <button
+              className="header-btn clear-chat-btn"
+              onClick={handleClearChat}
+              title="Clear conversation history without deleting saved memories"
+            >
+              🗑️ Clear Chat
+            </button>
             <button
               className="header-btn memory-toggle-btn"
               onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -207,7 +239,7 @@ function App() {
         memories={memories}
         isOpen={sidebarOpen}
         toggleSidebar={() => setSidebarOpen(false)}
-        onClearSession={handleClearSession}
+        onClearMemories={handleClearMemories}
       />
     </div>
   );

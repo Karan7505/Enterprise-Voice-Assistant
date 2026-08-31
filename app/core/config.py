@@ -31,6 +31,9 @@ class Settings:
     TTS_API_KEY: str = clean_str(os.getenv("TTS_API_KEY"))
     TTS_BASE_URL: str = clean_str(os.getenv("TTS_BASE_URL"))
 
+    # Chat context window
+    MAX_HISTORY_MESSAGES: int = int(clean_str(os.getenv("MAX_HISTORY_MESSAGES"), "10"))
+
 
 settings = Settings()
 

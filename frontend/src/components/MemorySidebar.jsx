@@ -1,8 +1,10 @@
 import { useState } from "react";
 
-function MemorySidebar({ memories, isOpen, toggleSidebar, onClearSession }) {
+function MemorySidebar({ memories, isOpen, toggleSidebar, onClearMemories, onClearSession }) {
   const [filter, setFilter] = useState("");
   const [copiedKey, setCopiedKey] = useState(null);
+
+  const clearHandler = onClearMemories || onClearSession;
 
   const memoryKeys = Object.keys(memories || {});
   const filteredKeys = memoryKeys.filter((key) =>
@@ -71,11 +73,11 @@ function MemorySidebar({ memories, isOpen, toggleSidebar, onClearSession }) {
       </div>
 
       <div className="sidebar-footer">
-        <button className="clear-session-btn" onClick={onClearSession}>
+        <button className="clear-session-btn" onClick={clearHandler} title="Delete extracted memories while keeping chat history">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
           </svg>
-          Reset Session & Memories
+          Reset Long-Term Memories
         </button>
       </div>
     </aside>

@@ -106,6 +106,27 @@ def extract_json(text: str) -> dict:
     return json.loads(text.strip())
 
 
+def delete_memories(
+    keys: list[str],
+    session_id: str = DEFAULT_SESSION_ID,
+):
+    if not keys:
+        return
+
+    conn = get_connection()
+    placeholders = ",".join("?" * len(keys))
+    conn.execute(
+        f"""
+        DELETE FROM memories
+        WHERE session_id = ?
+        AND memory_key IN ({placeholders})
+        """,
+        [session_id] + keys,
+    )
+    conn.commit()
+    conn.close()
+
+
 def clear_memories(
     session_id: str = DEFAULT_SESSION_ID,
 ):
@@ -115,4 +136,4 @@ def clear_memories(
         (session_id,),
     )
     conn.commit()
-    conn.close()
+    conn.close()
