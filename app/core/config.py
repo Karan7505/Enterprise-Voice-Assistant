@@ -1,11 +1,29 @@
 import logging
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
 logger = logging.getLogger(__name__)
+
+# Always resolve configuration relative to the repository, not the command's
+# working directory. In local development, a checked-out project's root .env
+# is intentionally authoritative over inherited shell/session variables.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ENV_FILE = PROJECT_ROOT / ".env"
+
+
+def load_project_environment(dotenv_path: Path = PROJECT_ENV_FILE) -> bool:
+    """Load a project dotenv file with local-development precedence.
+
+    When the root .env exists, its values replace inherited process values
+    before Settings is created. A deployment without that file keeps its
+    platform-provided process environment unchanged.
+    """
+    return load_dotenv(dotenv_path=dotenv_path, override=True)
+
+
+load_project_environment()
 
 
 def clean_str(val: str | None, default: str = "") -> str:
@@ -101,10 +119,6 @@ class Settings:
     OPENROUTER_API_KEY: str = clean_str(os.getenv("OPENROUTER_API_KEY"))
     OPENROUTER_MODEL: str = clean_str(os.getenv("OPENROUTER_MODEL"), "google/gemini-2.0-flash-001")
 
-    # Bytez.com API
-    BYTEZ_API_KEY: str = clean_str(os.getenv("BYTEZ_API_KEY"))
-    BYTEZ_MODEL: str = clean_str(os.getenv("BYTEZ_MODEL"), "meta-llama/Llama-3.3-70B-Instruct")
-
     # NVIDIA NIM API
     NVIDIA_API_KEY: str = clean_str(os.getenv("NVIDIA_API_KEY"))
     NVIDIA_MODEL: str = clean_str(os.getenv("NVIDIA_MODEL"), "meta/llama-3.3-70b-instruct")
@@ -116,7 +130,7 @@ class Settings:
     ELEVENLABS_API_KEY: str = clean_str(os.getenv("ELEVENLABS_API_KEY"))
     ELEVENLABS_VOICE_ID: str = clean_str(
         os.getenv("ELEVENLABS_VOICE_ID"),
-        "JBFqnCBsd6RMkjVDRZzb",  # George
+        "myFdf83MJZVXe8yKeA6H",
     )
     ELEVENLABS_MODEL_ID: str = clean_str(
         os.getenv("ELEVENLABS_MODEL_ID"),
@@ -151,17 +165,7 @@ class Settings:
         maximum=1.2,
     )
 
-    # Bytez TTS uses its model API, not OpenAI's /v1/audio/speech endpoint.
-    # Leave it disabled until a runnable Bytez text-to-speech model ID is set.
-    BYTEZ_TTS_MODEL: str = clean_str(os.getenv("BYTEZ_TTS_MODEL"))
-    BYTEZ_TTS_VOICE: str = clean_str(os.getenv("BYTEZ_TTS_VOICE"))
-    BYTEZ_TTS_SPEED: float = clean_float(
-        os.getenv("BYTEZ_TTS_SPEED"),
-        default=1.0,
-        minimum=0.25,
-        maximum=4.0,
-    )
-
+    # Optional OpenAI-compatible audio/speech endpoint.
     TTS_API_KEY: str = clean_str(os.getenv("TTS_API_KEY"))
     TTS_BASE_URL: str = clean_str(os.getenv("TTS_BASE_URL"))
     TTS_MODEL: str = clean_str(os.getenv("TTS_MODEL"), "gpt-4o-mini-tts")
@@ -198,8 +202,6 @@ settings = Settings()
 active_llm = []
 if settings.OPENROUTER_API_KEY and not settings.OPENROUTER_API_KEY.startswith("your_"):
     active_llm.append(f"OpenRouter ({settings.OPENROUTER_MODEL})")
-if settings.BYTEZ_API_KEY and not settings.BYTEZ_API_KEY.startswith("your_"):
-    active_llm.append(f"Bytez.com ({settings.BYTEZ_MODEL})")
 if settings.NVIDIA_API_KEY and not settings.NVIDIA_API_KEY.startswith("your_"):
     active_llm.append(f"NVIDIA ({settings.NVIDIA_MODEL})")
 if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your_"):
@@ -208,29 +210,13 @@ if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your_"):
 if active_llm:
     print(f"[LLM CONFIG] Active Provider(s): {', '.join(active_llm)}")
 else:
-    print("[CONFIG WARNING] No LLM API Key detected in .env! (Add OPENROUTER_API_KEY, BYTEZ_API_KEY, NVIDIA_API_KEY, or GEMINI_API_KEY)")
+    print("[CONFIG WARNING] No LLM API Key detected in .env! (Add OPENROUTER_API_KEY, NVIDIA_API_KEY, or GEMINI_API_KEY)")
 
 active_tts = []
 if settings.ELEVENLABS_API_KEY and not settings.ELEVENLABS_API_KEY.startswith("your_"):
     active_tts.append("ElevenLabs")
-if (
-    settings.BYTEZ_API_KEY
-    and not settings.BYTEZ_API_KEY.startswith("your_")
-    and settings.BYTEZ_TTS_MODEL
-):
-    active_tts.append("Bytez.com Audio API")
 if settings.TTS_API_KEY and not settings.TTS_API_KEY.startswith("your_"):
-    active_tts.append("Custom Audio API")
+    active_tts.append("Custom OpenAI-compatible TTS")
 active_tts.append("gTTS (Free Fallback)")
 
 print(f"[TTS CONFIG] Active Audio Engine(s): {', '.join(active_tts)}")
-
-if (
-    settings.BYTEZ_API_KEY
-    and not settings.BYTEZ_API_KEY.startswith("your_")
-    and not settings.BYTEZ_TTS_MODEL
-):
-    print(
-        "[TTS CONFIG] Bytez key detected, but Bytez TTS is disabled because "
-        "BYTEZ_TTS_MODEL is not configured."
-    )

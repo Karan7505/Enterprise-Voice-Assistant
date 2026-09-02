@@ -13,6 +13,7 @@ const getGreetingPeriod = (hour) => {
 function ChatWindow({
   messages,
   playAudio,
+  voiceTranscriptReveal,
   userName,
   isOrbCollapsed,
   onScrollableChange,
@@ -23,6 +24,8 @@ function ChatWindow({
   const wasNearBottomRef = useRef(true);
   const previousOrbStateRef = useRef(isOrbCollapsed);
   const [localHour, setLocalHour] = useState(() => new Date().getHours());
+  const revealedMessageId = voiceTranscriptReveal?.messageId ?? "";
+  const revealedText = voiceTranscriptReveal?.text ?? "";
 
   useEffect(() => {
     const refreshLocalHour = () => setLocalHour(new Date().getHours());
@@ -167,6 +170,15 @@ function ChatWindow({
     });
   }, [messages]);
 
+  // While the visible assistant transcript grows with its speech, keep the
+  // newest line in view only for readers who were already at the bottom.
+  useLayoutEffect(() => {
+    const chatBox = chatBoxRef.current;
+    if (!revealedMessageId || !chatBox || !wasNearBottomRef.current) return;
+
+    chatBox.scrollTop = chatBox.scrollHeight;
+  }, [revealedMessageId, revealedText]);
+
   const greeting = `Good ${getGreetingPeriod(localHour)}${userName ? `, ${userName}` : ""}`;
   const userInitial = userName.match(/[\p{L}\p{N}]/u)?.[0]?.toLocaleUpperCase() || "U";
 
@@ -187,9 +199,13 @@ function ChatWindow({
               key={msg.id}
               sender={msg.sender}
               text={msg.text}
+              displayText={
+                revealedMessageId === msg.id ? revealedText : msg.text
+              }
               audioUrl={msg.audioUrl}
               playAudio={playAudio}
               type={msg.type || "text"}
+              responseMode={msg.responseMode || "text"}
               voiceAudioBlob={msg.voiceAudioBlob}
               voiceDuration={msg.voiceDuration}
               userInitial={userInitial}

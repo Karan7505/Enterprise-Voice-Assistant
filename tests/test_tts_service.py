@@ -35,87 +35,141 @@ class SpeechOptionTests(unittest.TestCase):
     def test_instruction_capable_model_receives_profile(self):
         options = tts_service._build_openai_speech_options(
             model="gpt-4o-mini-tts-2025-12-15",
-            voice="onyx",
+            voice="ash",
             speed=1.0,
             instructions="Use a conversational delivery.",
         )
 
         self.assertEqual(options["instructions"], "Use a conversational delivery.")
 
-    def test_bytez_payload_includes_only_explicit_model_parameters(self):
-        with (
-            patch.object(settings, "BYTEZ_TTS_VOICE", "ash"),
-            patch.object(settings, "BYTEZ_TTS_SPEED", 0.95),
-        ):
-            payload = tts_service._build_bytez_payload("Hello")
-
-        self.assertEqual(payload["text"], "Hello")
-        self.assertFalse(payload["json"])
-        self.assertEqual(payload["params"], {"voice": "ash", "speed": 0.95})
-
 
 class ProviderFallbackTests(unittest.TestCase):
-    def test_bytez_is_skipped_without_a_configured_tts_model(self):
+    def test_elevenlabs_failure_uses_custom_after_partial_file_cleanup(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             audio_dir = Path(temp_dir)
 
-            def write_fallback(_, filepath):
-                filepath.write_bytes(b"complete")
-
-            with (
-                patch.object(tts_service, "AUDIO_DIR", audio_dir),
-                patch.object(settings, "ELEVENLABS_API_KEY", ""),
-                patch.object(settings, "BYTEZ_API_KEY", "test-key"),
-                patch.object(settings, "BYTEZ_TTS_MODEL", ""),
-                patch.object(settings, "TTS_API_KEY", ""),
-                patch.object(tts_service, "generate_speech_bytez") as bytez_mock,
-                patch.object(
-                    tts_service,
-                    "generate_speech_gtts",
-                    side_effect=write_fallback,
-                ) as gtts_mock,
-            ):
-                filename = tts_service.generate_speech("Hello")
-
-            self.assertTrue((audio_dir / filename).is_file())
-            bytez_mock.assert_not_called()
-            gtts_mock.assert_called_once()
-
-    def test_partial_file_is_removed_before_next_provider_runs(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            audio_dir = Path(temp_dir)
-
-            def fail_with_partial_file(_, filepath):
+            def fail_elevenlabs(_, filepath):
                 filepath.write_bytes(b"partial")
-                raise RuntimeError("provider failed")
+                raise RuntimeError("ElevenLabs failed")
 
-            def succeed_after_cleanup(_, filepath):
+            def succeed_custom(_, filepath):
                 self.assertFalse(filepath.exists())
                 filepath.write_bytes(b"complete")
 
             with (
                 patch.object(tts_service, "AUDIO_DIR", audio_dir),
-                patch.object(settings, "ELEVENLABS_API_KEY", "test-key"),
-                patch.object(settings, "BYTEZ_API_KEY", "test-key"),
-                patch.object(settings, "BYTEZ_TTS_MODEL", "vendor/test-tts"),
-                patch.object(settings, "TTS_API_KEY", ""),
+                patch.object(settings, "ELEVENLABS_API_KEY", "test-elevenlabs-key"),
+                patch.object(settings, "TTS_API_KEY", "test-custom-key"),
                 patch.object(
                     tts_service,
                     "generate_speech_elevenlabs",
-                    side_effect=fail_with_partial_file,
+                    side_effect=fail_elevenlabs,
                 ),
                 patch.object(
                     tts_service,
-                    "generate_speech_bytez",
-                    side_effect=succeed_after_cleanup,
-                ) as bytez_mock,
+                    "generate_speech_openai_tts",
+                    side_effect=succeed_custom,
+                ) as custom_mock,
                 patch.object(tts_service, "generate_speech_gtts") as gtts_mock,
             ):
                 filename = tts_service.generate_speech("Hello")
 
             self.assertTrue((audio_dir / filename).is_file())
-            bytez_mock.assert_called_once()
+            custom_mock.assert_called_once()
             gtts_mock.assert_not_called()
+
+    def test_full_chain_runs_in_order_and_cleans_partial_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_dir = Path(temp_dir)
+            attempts = []
+
+            def fail_elevenlabs(_, filepath):
+                attempts.append("ElevenLabs")
+                filepath.write_bytes(b"partial")
+                raise RuntimeError("ElevenLabs failed")
+
+            def fail_custom(_, filepath):
+                attempts.append("Custom")
+                self.assertFalse(filepath.exists())
+                filepath.write_bytes(b"partial")
+                raise RuntimeError("Custom TTS failed")
+
+            def succeed_gtts(_, filepath):
+                attempts.append("gTTS")
+                self.assertFalse(filepath.exists())
+                filepath.write_bytes(b"complete")
+
+            with (
+                patch.object(tts_service, "AUDIO_DIR", audio_dir),
+                patch.object(settings, "ELEVENLABS_API_KEY", "test-elevenlabs-key"),
+                patch.object(settings, "TTS_API_KEY", "test-custom-key"),
+                patch.object(
+                    tts_service,
+                    "generate_speech_elevenlabs",
+                    side_effect=fail_elevenlabs,
+                ),
+                patch.object(
+                    tts_service,
+                    "generate_speech_openai_tts",
+                    side_effect=fail_custom,
+                ),
+                patch.object(
+                    tts_service,
+                    "generate_speech_gtts",
+                    side_effect=succeed_gtts,
+                ),
+            ):
+                filename = tts_service.generate_speech("Hello")
+
+            self.assertTrue((audio_dir / filename).is_file())
+            self.assertEqual(attempts, ["ElevenLabs", "Custom", "gTTS"])
+
+    def test_custom_provider_is_skipped_without_a_key(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_dir = Path(temp_dir)
+
+            def succeed_gtts(_, filepath):
+                filepath.write_bytes(b"complete")
+
+            with (
+                patch.object(tts_service, "AUDIO_DIR", audio_dir),
+                patch.object(settings, "ELEVENLABS_API_KEY", ""),
+                patch.object(settings, "TTS_API_KEY", ""),
+                patch.object(tts_service, "generate_speech_openai_tts") as custom_mock,
+                patch.object(
+                    tts_service,
+                    "generate_speech_gtts",
+                    side_effect=succeed_gtts,
+                ) as gtts_mock,
+            ):
+                filename = tts_service.generate_speech("Hello")
+
+            self.assertTrue((audio_dir / filename).is_file())
+            custom_mock.assert_not_called()
+            gtts_mock.assert_called_once()
+
+    def test_final_gtts_failure_removes_partial_audio_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_dir = Path(temp_dir)
+
+            def fail_gtts(_, filepath):
+                filepath.write_bytes(b"partial")
+                raise RuntimeError("gTTS failed")
+
+            with (
+                patch.object(tts_service, "AUDIO_DIR", audio_dir),
+                patch.object(settings, "ELEVENLABS_API_KEY", ""),
+                patch.object(settings, "TTS_API_KEY", ""),
+                patch.object(
+                    tts_service,
+                    "generate_speech_gtts",
+                    side_effect=fail_gtts,
+                ),
+            ):
+                with self.assertRaises(RuntimeError):
+                    tts_service.generate_speech("Hello")
+
+            self.assertEqual(list(audio_dir.glob("*.mp3")), [])
 
 
 if __name__ == "__main__":

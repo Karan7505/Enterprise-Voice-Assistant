@@ -60,36 +60,6 @@ def generate_with_openrouter(prompt: str) -> str:
     raise last_err or LLMError("OpenRouter request failed")
 
 
-def generate_with_bytez(prompt: str) -> str:
-    key = settings.BYTEZ_API_KEY
-    models_to_try = unique_models(
-        settings.BYTEZ_MODEL,
-        "meta-llama/Llama-3.3-70B-Instruct",
-        "Qwen/Qwen2.5-7B-Instruct",
-    )
-    last_err = None
-
-    client = OpenAI(
-        base_url="https://api.bytez.com/v1",
-        api_key=key,
-        default_headers={
-            "Authorization": f"Bearer {key}",
-        },
-    )
-
-    for model in models_to_try:
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            last_err = e
-
-    raise last_err or LLMError("Bytez.com request failed")
-
-
 def generate_with_nvidia(prompt: str) -> str:
     key = settings.NVIDIA_API_KEY
     client = OpenAI(
@@ -136,15 +106,7 @@ def generate(prompt: str) -> str:
             logger.exception("OpenRouter request failed")
             failed_providers.append("OpenRouter")
 
-    # Provider 2: Bytez.com
-    if settings.BYTEZ_API_KEY and not settings.BYTEZ_API_KEY.startswith("your_"):
-        try:
-            return generate_with_bytez(prompt)
-        except Exception:
-            logger.exception("Bytez.com request failed")
-            failed_providers.append("Bytez.com")
-
-    # Provider 3: NVIDIA NIM
+    # Provider 2: NVIDIA NIM
     if settings.NVIDIA_API_KEY and not settings.NVIDIA_API_KEY.startswith("your_"):
         try:
             return generate_with_nvidia(prompt)
@@ -152,7 +114,7 @@ def generate(prompt: str) -> str:
             logger.exception("NVIDIA request failed")
             failed_providers.append("NVIDIA")
 
-    # Provider 4: Direct Google Gemini
+    # Provider 3: Direct Google Gemini
     if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your_"):
         try:
             return generate_with_gemini(prompt)

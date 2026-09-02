@@ -4,9 +4,11 @@ import Icon from "./Icon";
 function MessageBubble({
   sender,
   text,
+  displayText = text,
   audioUrl,
   playAudio,
   type,
+  responseMode = "text",
   voiceAudioBlob,
   voiceDuration,
   userInitial = "U",
@@ -174,11 +176,11 @@ function MessageBubble({
           </div>
         </div>
       ) : (
-        <div className={`message-bubble ${isUser ? "user-message" : isSystem ? "system-message" : "ai-message"}`}>
+        <div className={`message-bubble ${isUser ? "user-message" : isSystem ? "system-message" : "ai-message"}${responseMode === "voice" && !isUser && !isSystem ? " voice-response" : ""}`}>
           <div className="message-header">
             <span className="sender-name">{displaySender}</span>
             <div className="message-actions">
-              {!isUser && audioUrl && (
+              {!isUser && responseMode === "voice" && audioUrl && (
                 <button
                   type="button"
                   className="action-icon-btn"
@@ -204,7 +206,7 @@ function MessageBubble({
             </div>
           </div>
 
-          <div className="message-text">{text}</div>
+          <div className="message-text">{displayText}</div>
         </div>
       )}
 

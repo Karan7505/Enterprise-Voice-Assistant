@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import "./App.css";
 
@@ -39,6 +39,8 @@ const releaseAudioElement = (audioRef) => {
 
   audio.pause();
   audio.onplay = null;
+  audio.onloadedmetadata = null;
+  audio.ontimeupdate = null;
   audio.onended = null;
   audio.onerror = null;
   audio.removeAttribute("src");
@@ -54,6 +56,24 @@ const postClearRequest = (route) =>
 const createMessageId = () =>
   globalThis.crypto?.randomUUID?.() ||
   `message-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+const getVoiceTranscriptPreview = (fullText, progress) => {
+  if (!fullText || progress >= 1) return fullText;
+  if (!Number.isFinite(progress)) return fullText;
+
+  const boundedProgress = Math.min(1, Math.max(0, progress));
+  const targetLength = Math.max(1, Math.ceil(fullText.length * boundedProgress));
+  const tokens = fullText.match(/\S+\s*/g);
+  if (!tokens) return fullText.slice(0, targetLength);
+
+  let preview = "";
+  for (const token of tokens) {
+    if (preview && preview.length + token.length > targetLength) break;
+    preview += token;
+  }
+
+  return preview || tokens[0].slice(0, targetLength);
+};
 
 // The assistant stores the user's name under canonical keys; accept common
 // variations so the greeting and monogram avatar use the real first initial.
@@ -96,12 +116,70 @@ function App() {
   const [isFullResetting, setIsFullResetting] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
   const [idleCycle, setIdleCycle] = useState(0);
+  const [voiceTranscriptReveal, setVoiceTranscriptReveal] = useState(null);
   const audioRef = useRef(null);
+  const activeVoiceTranscriptRef = useRef(null);
+  const playbackSequenceRef = useRef(0);
   const sessionEpochRef = useRef(0);
   const activeChatRequestsRef = useRef(new Set());
   const clearedSectionsRef = useRef({ conversation: false, memory: false });
   const conversationClearInFlightRef = useRef(false);
   const fullResetInFlightRef = useRef(false);
+
+  const finalizeVoiceTranscript = useCallback((playbackToken) => {
+    const activeTranscript = activeVoiceTranscriptRef.current;
+    if (
+      !activeTranscript ||
+      activeTranscript.playbackToken !== playbackToken
+    ) {
+      return;
+    }
+
+    activeVoiceTranscriptRef.current = null;
+    setVoiceTranscriptReveal((currentReveal) => (
+      currentReveal?.messageId === activeTranscript.messageId
+        ? {
+          messageId: activeTranscript.messageId,
+          text: activeTranscript.fullText,
+        }
+        : currentReveal
+    ));
+  }, []);
+
+  const updateVoiceTranscript = useCallback((playbackToken, progress) => {
+    const activeTranscript = activeVoiceTranscriptRef.current;
+    if (
+      !activeTranscript ||
+      activeTranscript.playbackToken !== playbackToken
+    ) {
+      return;
+    }
+
+    const preview = getVoiceTranscriptPreview(
+      activeTranscript.fullText,
+      progress,
+    );
+    setVoiceTranscriptReveal((currentReveal) => {
+      if (
+        currentReveal?.messageId === activeTranscript.messageId &&
+        currentReveal.text === preview
+      ) {
+        return currentReveal;
+      }
+      return { messageId: activeTranscript.messageId, text: preview };
+    });
+  }, []);
+
+  const stopResponsePlayback = useCallback(() => {
+    const activeTranscript = activeVoiceTranscriptRef.current;
+    playbackSequenceRef.current += 1;
+    if (activeTranscript) {
+      finalizeVoiceTranscript(activeTranscript.playbackToken);
+    }
+    releaseAudioElement(audioRef);
+    setIsPlaying(false);
+  }, [finalizeVoiceTranscript]);
+
   const isOrbHidden = messages.length > 0 && chatScrollable;
   const isJarvisBusy =
     message.length > 0 ||
@@ -174,7 +252,10 @@ function App() {
     };
   }, []);
 
-  useEffect(() => () => releaseAudioElement(audioRef), []);
+  useEffect(() => () => {
+    activeVoiceTranscriptRef.current = null;
+    releaseAudioElement(audioRef);
+  }, []);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -183,8 +264,7 @@ function App() {
       if (!pageIsVisible) {
         // Ambient audio has its own visibility gate. Stop response playback as
         // well so Jarvis never continues speaking in a background tab.
-        releaseAudioElement(audioRef);
-        setIsPlaying(false);
+        stopResponsePlayback();
       }
     };
 
@@ -192,7 +272,7 @@ function App() {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [stopResponsePlayback]);
 
   useEffect(() => {
     setIsAmbientIdle(false);
@@ -235,43 +315,85 @@ function App() {
     }
   }, [isOrbHidden, isListening]);
 
-  const playAudio = async (url) => {
+  const playAudio = useCallback(async (url, transcript = null) => {
     if (!url) return;
     let audio = null;
+    let settled = false;
+    let playbackToken = null;
+
+    const finishPlayback = () => {
+      if (settled) return;
+      settled = true;
+
+      if (playbackToken !== null) {
+        finalizeVoiceTranscript(playbackToken);
+      }
+
+      if (audio && audioRef.current === audio) {
+        setIsPlaying(false);
+        audio.onplay = null;
+        audio.onloadedmetadata = null;
+        audio.ontimeupdate = null;
+        audio.onended = null;
+        audio.onerror = null;
+        audio.removeAttribute("src");
+        audio.load();
+        audioRef.current = null;
+      } else if (!audioRef.current) {
+        setIsPlaying(false);
+      }
+    };
+
     try {
-      releaseAudioElement(audioRef);
+      stopResponsePlayback();
+      playbackToken = playbackSequenceRef.current + 1;
+      playbackSequenceRef.current = playbackToken;
+
       const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
       audio = new Audio(fullUrl);
       audioRef.current = audio;
 
-      const finishPlayback = () => {
-        if (audioRef.current === audio) {
-          setIsPlaying(false);
-          audio.onplay = null;
-          audio.onended = null;
-          audio.onerror = null;
-          audio.removeAttribute("src");
-          audio.load();
-          audioRef.current = null;
+      if (transcript?.messageId && typeof transcript.fullText === "string") {
+        activeVoiceTranscriptRef.current = {
+          ...transcript,
+          playbackToken,
+        };
+        setVoiceTranscriptReveal({ messageId: transcript.messageId, text: "" });
+      }
+
+      const updateTranscriptProgress = () => {
+        if (audioRef.current !== audio || playbackToken === null) return;
+
+        const duration = audio.duration;
+        if (!Number.isFinite(duration) || duration <= 0) {
+          if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+            // An unusable duration means there is no safe timing signal. Show
+            // the complete reply rather than leaving a partial transcript.
+            finalizeVoiceTranscript(playbackToken);
+          }
+          return;
         }
+
+        updateVoiceTranscript(playbackToken, audio.currentTime / duration);
       };
 
-      audio.onplay = () => setIsPlaying(true);
+      audio.onplay = () => {
+        if (audioRef.current !== audio) return;
+        setIsPlaying(true);
+        updateTranscriptProgress();
+      };
+      audio.onloadedmetadata = updateTranscriptProgress;
+      audio.ontimeupdate = updateTranscriptProgress;
       audio.onended = finishPlayback;
       audio.onerror = finishPlayback;
 
       setIsPlaying(true);
       await audio.play();
     } catch (err) {
-      if (audioRef.current === audio) {
-        releaseAudioElement(audioRef);
-        setIsPlaying(false);
-      } else if (!audioRef.current) {
-        setIsPlaying(false);
-      }
+      finishPlayback();
       console.error("Audio playback error:", err);
     }
-  };
+  }, [finalizeVoiceTranscript, stopResponsePlayback, updateVoiceTranscript]);
 
   const sendMessage = async (textToSend) => {
     const userMessage = (textToSend || message).trim();
@@ -286,6 +408,7 @@ function App() {
     clearedSectionsRef.current = { conversation: false, memory: false };
     setConversationStarted(true);
     setIsAmbientIdle(false);
+    stopResponsePlayback();
 
     setMessages((prev) => [
       ...prev,
@@ -299,7 +422,7 @@ function App() {
 
     setMessage("");
 
-    await sendToApi(userMessage);
+    await sendToApi(userMessage, "text");
   };
 
   const sendVoiceMessage = async (transcript, voiceBlob, duration) => {
@@ -315,28 +438,30 @@ function App() {
     clearedSectionsRef.current = { conversation: false, memory: false };
     setConversationStarted(true);
     setIsAmbientIdle(false);
+    stopResponsePlayback();
 
-    // Show as voice note bubble (no text shown to user)
+    // Keep the captured transcript internally for the existing voice request,
+    // but render only the audio note in the user-facing conversation.
     setMessages((prev) => [
       ...prev,
       {
         id: createMessageId(),
         sender: "You",
-        text: voiceTranscript,  // hidden, only sent to AI
+        text: voiceTranscript,
         type: "audio",
         voiceAudioBlob: voiceBlob,
         voiceDuration: duration,
       },
     ]);
 
-    await sendToApi(voiceTranscript);
+    await sendToApi(voiceTranscript, "voice");
   };
 
-  const sendToApi = async (userMessage) => {
+  const sendToApi = async (userMessage, responseMode) => {
     const requestEpoch = sessionEpochRef.current;
     const request = axios.post(
       `${API_BASE}/chat`,
-      { message: userMessage },
+      { message: userMessage, response_mode: responseMode },
       { timeout: CHAT_REQUEST_TIMEOUT_MS },
     );
     activeChatRequestsRef.current.add(request);
@@ -349,15 +474,17 @@ function App() {
       const replyText = response.data.reply;
       const audioUrl = response.data.audio_url;
       const updatedMemories = response.data.memories;
+      const assistantMessageId = createMessageId();
 
       setMessages((prev) => [
         ...prev,
         {
-          id: createMessageId(),
+          id: assistantMessageId,
           sender: "AI",
           text: replyText,
           audioUrl: audioUrl,
           type: "text",
+          responseMode,
         },
       ]);
 
@@ -365,8 +492,11 @@ function App() {
         setMemories(updatedMemories);
       }
 
-      if (audioUrl) {
-        void playAudio(audioUrl);
+      if (responseMode === "voice" && audioUrl) {
+        void playAudio(audioUrl, {
+          messageId: assistantMessageId,
+          fullText: replyText,
+        });
       }
     } catch (error) {
       if (requestEpoch !== sessionEpochRef.current) return;
@@ -391,11 +521,13 @@ function App() {
 
     fullResetInFlightRef.current = true;
     sessionEpochRef.current += 1;
+    stopResponsePlayback();
     setIsFullResetting(true);
     setIsAmbientIdle(false);
     setInitialDataLoaded(false);
     setMessage("");
     setMessages([]);
+    setVoiceTranscriptReveal(null);
     setMemories({});
     setSidebarOpen(false);
     setConversationStarted(false);
@@ -406,9 +538,6 @@ function App() {
     setIsListening(false);
     setVoiceLevel(0);
     setResetEpoch((epoch) => epoch + 1);
-    releaseAudioElement(audioRef);
-    setIsPlaying(false);
-
     let serverResetSucceeded = false;
     try {
       // Let already accepted chat work finish, then clear once more so a late
@@ -461,14 +590,13 @@ function App() {
 
     conversationClearInFlightRef.current = true;
     sessionEpochRef.current += 1;
+    stopResponsePlayback();
     setIsClearingConversation(true);
     setMessages([]);
+    setVoiceTranscriptReveal(null);
     setConversationStarted(false);
     setChatScrollable(false);
     setIsAmbientIdle(false);
-    releaseAudioElement(audioRef);
-    setIsPlaying(false);
-
     let didClearConversation = false;
     try {
       // Each chat request has a finite client timeout. Waiting for those
@@ -564,6 +692,7 @@ function App() {
           <ChatWindow
             messages={messages}
             playAudio={playAudio}
+            voiceTranscriptReveal={voiceTranscriptReveal}
             userName={userName}
             isOrbCollapsed={isOrbHidden}
             onScrollableChange={setChatScrollable}

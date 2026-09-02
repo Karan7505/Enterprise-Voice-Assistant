@@ -44,13 +44,13 @@ The AI **automatically extracts facts** from every conversation and stores them 
 <td width="50%">
 
 ### 🔊 AI Voice Replies
-AI replies are synthesized through an ordered fallback chain: **ElevenLabs**, **Bytez Audio**, a custom OpenAI-compatible TTS endpoint, then **gTTS**. Text replies still succeed when every TTS provider is unavailable.
+Voice replies are synthesized through an ordered fallback chain: **ElevenLabs**, a **custom OpenAI-compatible TTS endpoint**, then **gTTS**. Typed messages are text-only and do not invoke TTS.
 
 </td>
 <td width="50%">
 
 ### 💬 Dual Input Modes
-**Voice** or **text** — your choice. Typed messages appear as clean text bubbles. Voice messages appear as audio note bubbles. Both are sent to the AI for understanding, but the display is completely different — smart and intentional.
+**Voice** or **text** — your choice. Typed messages receive text-only replies. Voice messages appear as audio notes with a subtle transcript and receive spoken replies. Both modes use the identical conversation and long-term-memory pipeline.
 
 </td>
 </tr>
@@ -94,7 +94,7 @@ Enterprise-Voice-Assistant/
 │   │   └── chat_prompt.py               # Memory-aware enterprise system prompt
 │   │
 │   └── 📂 services/
-│       ├── llm_service.py               # OpenRouter, Bytez, NVIDIA, and Gemini fallbacks
+│       ├── llm_service.py               # OpenRouter, NVIDIA, and Gemini fallbacks
 │       ├── tts_service.py               # Multi-provider TTS + generated .mp3 cleanup
 │       ├── memory_service.py            # SQLite CRUD for long-term memories
 │       ├── database_chat_history.py     # SQLite CRUD for conversation history
@@ -135,7 +135,7 @@ MediaRecorder (audio blob)  +  SpeechRecognition (transcript)
     │                      (play/pause + waveform + duration)
     │
     ▼
-Transcript sent silently to FastAPI /chat
+Transcript sent to FastAPI /chat in voice-response mode
     │
     ▼
 session_service.py
@@ -152,13 +152,13 @@ session_service.py
             │
             ├── Save new memories → SQLite
             ├── Save message + reply → SQLite
-            └── Generate speech through the TTS fallback chain → .mp3
+            └── Voice mode only: generate speech through the TTS fallback chain → .mp3
                     │
                     ▼
-              Frontend receives reply + audio_url + memories
+              Frontend receives reply + optional audio_url + memories
                     │
-                    ├── AI text bubble rendered
-                    ├── Audio plays automatically
+                    ├── AI text bubble rendered in both modes
+                    ├── Voice-mode audio plays automatically
                     └── Memory sidebar updates live
 ```
 
@@ -172,7 +172,7 @@ session_service.py
 |---|---|
 | Python | 3.11 or higher |
 | Node.js | 18 or higher |
-| LLM API key | At least one of OpenRouter, Bytez, NVIDIA NIM, or Google Gemini |
+| LLM API key | At least one of OpenRouter, NVIDIA NIM, or Google Gemini |
 | TTS API key | Optional; gTTS is the no-key fallback |
 
 ---
@@ -196,20 +196,41 @@ Open `.env` and fill in at least one LLM key. TTS keys are optional:
 OPENROUTER_API_KEY=your_openrouter_api_key_here
 OPENROUTER_MODEL=google/gemini-2.0-flash-001
 ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
-ELEVENLABS_VOICE_ID=JBFqnCBsd6RMkjVDRZzb
+ELEVENLABS_VOICE_ID=myFdf83MJZVXe8yKeA6H
 FRONTEND_URL=http://localhost:5173
 CORS_ORIGINS=http://localhost:5173
 ```
 
+In local development, the root `.env` file is authoritative: its values
+override inherited terminal or VS Code environment variables each time the
+backend starts. The normal workflow is simply **edit `.env` → save → restart
+the backend**. Deployments without a root `.env` continue to use their platform
+environment variables.
+
 The default voice profile favors a warm, calm, confident male delivery at a
 natural medium pace. ElevenLabs exposes precise controls through its voice ID
-and stability/style settings. Bytez TTS uses Bytez model IDs and model-specific
-voice parameters; it is skipped unless `BYTEZ_TTS_MODEL` is explicitly set.
-The custom OpenAI-compatible path defaults to `gpt-4o-mini-tts` with the `ash`
-voice and receives the conversational JARVIS delivery instructions from
-`TTS_INSTRUCTIONS`; hearing `ash` requires a valid `TTS_API_KEY`. A Bytez API
-key by itself does not provide that OpenAI voice. All values are configurable in `.env.example`, and the
-fallback order remains ElevenLabs, Bytez, custom TTS, then gTTS.
+and stability/style settings. The custom OpenAI-compatible path defaults to
+`gpt-4o-mini-tts` with the `ash` voice and uses the conversational JARVIS
+delivery instructions from `TTS_INSTRUCTIONS`; it requires a valid
+`TTS_API_KEY`. All values are configurable in `.env.example`.
+
+### TTS provider selection rules
+
+TTS runs only when `response_mode` is `"voice"`; text-mode replies never create
+audio. For each voice reply, the backend tries the following providers in this
+exact order and stops at the first successful synthesis:
+
+1. **ElevenLabs** — attempted when `ELEVENLABS_API_KEY` is non-empty and not a
+   `your_...` placeholder.
+2. **Custom/OpenAI-compatible TTS** — attempted when `TTS_API_KEY` is valid.
+   `TTS_BASE_URL` is optional (a blank value uses the OpenAI SDK default);
+   `TTS_MODEL`, `TTS_VOICE`, and `TTS_SPEED` select the request settings.
+   `TTS_INSTRUCTIONS` is sent only to `gpt-4o-mini-tts*` models.
+3. **gTTS** — always attempted last and requires no API key.
+
+If a provider fails, any partial `.mp3` is removed before the next provider is
+tried. If gTTS also fails, the API preserves the text reply and returns an empty
+`audio_url`.
 
 > Voice character is provider- and voice-dependent. Audition an available male
 > voice and set `ELEVENLABS_VOICE_ID` for the closest neutral-English match.
@@ -236,7 +257,11 @@ pip install -r requirements.txt
 ### Step 4 — Run the Backend
 
 ```bash
-uvicorn app.main:app --reload --port 8000
+# With the virtual environment activated
+python -m uvicorn app.main:app --reload --port 8000
+
+# Or on Windows, without activating it
+.\venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
 The API is now live at `http://localhost:8000`.  
@@ -260,13 +285,15 @@ Local development automatically uses `http://localhost:8000` from `frontend/.env
 
 ### `POST /chat`
 
-Send a message and receive an AI reply with audio and updated memories.
+Send a message and receive an AI reply and updated memories. Set
+`response_mode` to `"text"` for a text-only reply or `"voice"` for a spoken reply.
 
 **Request:**
 ```json
 {
   "message": "My name is Karan and I work at Google as a software architect.",
-  "session_id": "default"
+  "session_id": "default",
+  "response_mode": "text"
 }
 ```
 
@@ -274,7 +301,7 @@ Send a message and receive an AI reply with audio and updated memories.
 ```json
 {
   "reply": "Great to meet you, Karan! As a software architect at Google, you must be working on some fascinating systems. How can I assist you today?",
-  "audio_url": "/audio/a3f92b1c40d24b6bbcbf6bf2d624ba91.mp3",
+  "audio_url": "",
   "memories": {
     "name": "Karan",
     "company": "Google",
@@ -287,7 +314,7 @@ Send a message and receive an AI reply with audio and updated memories.
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/chat` | Send a message → get reply + audio URL + updated memories |
+| `POST` | `/chat` | Send a text- or voice-mode message → get reply, optional audio URL, and updated memories |
 | `GET` | `/memories` | Fetch all stored long-term memories for the session |
 | `GET` | `/history` | Fetch full conversation history for the session |
 | `POST` | `/clear-chat` | Clear conversation history while preserving long-term memories |
@@ -360,12 +387,12 @@ The voice note system runs **two browser APIs in parallel** when you press the m
 
 When you press **Stop**:
 1. The audio `Blob` is converted to a local URL and rendered as a **voice note bubble** with a play/pause button and waveform visualizer.
-2. The transcript is **silently sent to the AI** — it never appears as text in the chat.
-3. The AI processes the transcript as a normal message and replies.
+2. The transcript is sent to the AI and shown beneath the voice note in a subtle treatment.
+3. The AI processes the transcript through the same memory-aware pipeline as typed text, then replies with voice and a subtle text transcript.
 
 Voice-note object URLs are created only for playback and revoked on completion, failure, or component cleanup. Recorder tracks, speech recognition, timers, and playback objects are also stopped when their components unmount.
 
-This mirrors exactly how WhatsApp works: you see the audio file, not the transcription.
+The transcript provides a lightweight confirmation of what was understood without turning the voice flow into a conventional text chat.
 
 ---
 
@@ -373,8 +400,8 @@ This mirrors exactly how WhatsApp works: you see the audio file, not the transcr
 
 | Layer | Technology | Purpose |
 |---|---|---|
-| **LLM** | OpenRouter → Bytez → NVIDIA NIM → Google Gemini | Natural language understanding + memory extraction with provider fallback |
-| **TTS** | ElevenLabs → Bytez Audio → custom OpenAI-compatible TTS → gTTS | Text-to-speech with graceful fallback |
+| **LLM** | OpenRouter → NVIDIA NIM → Google Gemini | Natural language understanding + memory extraction with provider fallback |
+| **TTS** | ElevenLabs → Custom/OpenAI-compatible TTS → gTTS | Voice-mode text-to-speech with graceful fallback |
 | **Backend Framework** | FastAPI + Uvicorn | REST API server |
 | **Database** | SQLite | Zero-config persistent storage for memories + history |
 | **Frontend Framework** | React 18 + Vite | Component-based UI with fast HMR |

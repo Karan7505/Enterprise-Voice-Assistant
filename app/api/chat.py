@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 import re
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -29,6 +30,9 @@ DEFAULT_SESSION_ID = "default"
 class ChatRequest(BaseModel):
     message: str
     session_id: str = DEFAULT_SESSION_ID
+    # Preserve the API's historical voice-first behavior for callers that do
+    # not yet send a mode. The frontend always sends its mode explicitly.
+    response_mode: Literal["text", "voice"] = "voice"
 
 
 class ChatResponse(BaseModel):
@@ -52,12 +56,13 @@ def chat(request: ChatRequest):
             detail="The assistant is temporarily unavailable. Please try again.",
         ) from None
 
-    try:
-        filename = generate_speech(reply)
-        audio_url = f"/audio/{filename}"
-    except Exception:
-        logger.exception("TTS generation failed; returning the text response without audio")
-        audio_url = ""
+    audio_url = ""
+    if request.response_mode == "voice":
+        try:
+            filename = generate_speech(reply)
+            audio_url = f"/audio/{filename}"
+        except Exception:
+            logger.exception("TTS generation failed; returning the text response without audio")
 
     memories = get_all_memories(session_id)
 
