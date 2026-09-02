@@ -1,61 +1,205 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import MessageBubble from "./MessageBubble";
 
-function ChatWindow({ messages, playAudio, onSelectSuggestion }) {
+const OVERFLOW_EPSILON = 2;
+const ORB_RESTORE_BUFFER = 24;
+
+const getGreetingPeriod = (hour) => {
+  if (hour >= 5 && hour < 12) return "morning";
+  if (hour >= 12 && hour < 17) return "afternoon";
+  return "evening";
+};
+
+function ChatWindow({
+  messages,
+  playAudio,
+  userName,
+  isOrbCollapsed,
+  onScrollableChange,
+}) {
   const chatEndRef = useRef(null);
+  const chatBoxRef = useRef(null);
+  const chatThreadRef = useRef(null);
+  const wasNearBottomRef = useRef(true);
+  const previousOrbStateRef = useRef(isOrbCollapsed);
+  const [localHour, setLocalHour] = useState(() => new Date().getHours());
+
+  useEffect(() => {
+    const refreshLocalHour = () => setLocalHour(new Date().getHours());
+    const timerId = window.setInterval(refreshLocalHour, 60_000);
+
+    return () => window.clearInterval(timerId);
+  }, []);
+
+  useEffect(() => {
+    const chatBox = chatBoxRef.current;
+    if (!chatBox) return undefined;
+
+    const updateNearBottom = () => {
+      const distanceFromBottom =
+        chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight;
+      wasNearBottomRef.current = distanceFromBottom < 72;
+    };
+
+    updateNearBottom();
+    chatBox.addEventListener("scroll", updateNearBottom, { passive: true });
+
+    return () => chatBox.removeEventListener("scroll", updateNearBottom);
+  }, []);
+
+  // Measure the message thread itself rather than the scroll container. A
+  // collapsed orb makes the container taller, so comparing only scrollHeight
+  // and clientHeight would otherwise make the orb repeatedly hide and return.
+  useLayoutEffect(() => {
+    const chatBox = chatBoxRef.current;
+    const chatThread = chatThreadRef.current;
+
+    if (typeof onScrollableChange !== "function") return undefined;
+    if (messages.length === 0 || !chatBox || !chatThread) {
+      onScrollableChange(false);
+      return undefined;
+    }
+
+    let animationFrameId = null;
+
+    const measureOverflow = () => {
+      animationFrameId = null;
+
+      const chatStyle = window.getComputedStyle(chatBox);
+      const verticalPadding =
+        (Number.parseFloat(chatStyle.paddingTop) || 0) +
+        (Number.parseFloat(chatStyle.paddingBottom) || 0);
+      const availableHeight = Math.max(0, chatBox.clientHeight - verticalPadding);
+      const contentHeight = chatThread.scrollHeight;
+      const mainContent = chatBox.closest(".main-content");
+      const configuredOrbSpace = mainContent
+        ? Number.parseFloat(
+            window
+              .getComputedStyle(mainContent)
+              .getPropertyValue("--conversation-orb-space"),
+          )
+        : 0;
+      const orbSpace = Number.isFinite(configuredOrbSpace)
+        ? configuredOrbSpace
+        : 0;
+
+      if (isOrbCollapsed) {
+        const availableWithOrb = Math.max(0, availableHeight - orbSpace);
+        const shouldStayCollapsed =
+          contentHeight > availableWithOrb - ORB_RESTORE_BUFFER;
+
+        if (!shouldStayCollapsed) {
+          onScrollableChange(false);
+        }
+        return;
+      }
+
+      if (contentHeight > availableHeight + OVERFLOW_EPSILON) {
+        onScrollableChange(true);
+      }
+    };
+
+    const scheduleMeasurement = () => {
+      if (animationFrameId !== null) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+      animationFrameId = window.requestAnimationFrame(measureOverflow);
+    };
+
+    let resizeObserver = null;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(scheduleMeasurement);
+      resizeObserver.observe(chatBox);
+      resizeObserver.observe(chatThread);
+    }
+
+    scheduleMeasurement();
+    window.addEventListener("resize", scheduleMeasurement);
+
+    return () => {
+      if (animationFrameId !== null) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleMeasurement);
+    };
+  }, [isOrbCollapsed, messages, onScrollableChange]);
+
+  // If the reader was already at the newest message, keep that position while
+  // the orb's smooth height transition changes the chat viewport.
+  useLayoutEffect(() => {
+    if (previousOrbStateRef.current === isOrbCollapsed) return undefined;
+    previousOrbStateRef.current = isOrbCollapsed;
+
+    const chatBox = chatBoxRef.current;
+    if (!chatBox || !wasNearBottomRef.current) return undefined;
+
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    const pinDuration = reducedMotion ? 34 : 300;
+    const startedAt = performance.now();
+    let animationFrameId = null;
+
+    const keepNewestMessageVisible = (now) => {
+      chatBox.scrollTop = chatBox.scrollHeight;
+      if (now - startedAt < pinDuration) {
+        animationFrameId = window.requestAnimationFrame(
+          keepNewestMessageVisible,
+        );
+      }
+    };
+
+    animationFrameId = window.requestAnimationFrame(keepNewestMessageVisible);
+
+    return () => {
+      if (animationFrameId !== null) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, [isOrbCollapsed]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({
-      behavior: "smooth",
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
     });
   }, [messages]);
 
-  const suggestions = [
-    "Hi! My name is Alex, I'm a Senior Engineer at TechCorp in San Francisco.",
-    "I prefer concise technical answers and Python solutions.",
-    "What do you remember about me?",
-    "Can you summarize my profile and long-term memories?",
-  ];
+  const greeting = `Good ${getGreetingPeriod(localHour)}${userName ? `, ${userName}` : ""}`;
+  const userInitial = userName.match(/[\p{L}\p{N}]/u)?.[0]?.toLocaleUpperCase() || "U";
 
   return (
-    <div className="chat-box">
+    <div className="chat-box" ref={chatBoxRef}>
       {messages.length === 0 ? (
         <div className="empty-chat">
           <div className="empty-hero">
-            <div className="sparkle-icon">⚡</div>
-            <h3>Welcome to Enterprise Voice Assistant</h3>
-            <p>Speak or type to converse with AI. Important facts are automatically extracted into long-term memory!</p>
-          </div>
-          <div className="suggestion-pills">
-            {suggestions.map((prompt, idx) => (
-              <button
-                key={idx}
-                className="suggestion-pill"
-                onClick={() => onSelectSuggestion(prompt)}
-              >
-                "{prompt}"
-              </button>
-            ))}
+            <h2 className="time-greeting">{greeting}</h2>
+            <h3>How can I help?</h3>
+            <p>Speak naturally or type a message to begin.</p>
           </div>
         </div>
       ) : (
-        messages.map((msg, index) => (
-          <MessageBubble
-            key={index}
-            sender={msg.sender}
-            text={msg.text}
-            audioUrl={msg.audioUrl}
-            playAudio={playAudio}
-            type={msg.type || "text"}
-            voiceAudioUrl={msg.voiceAudioUrl}
-            voiceDuration={msg.voiceDuration}
-          />
-        ))
+        <div className="chat-thread" ref={chatThreadRef}>
+          {messages.map((msg) => (
+            <MessageBubble
+              key={msg.id}
+              sender={msg.sender}
+              text={msg.text}
+              audioUrl={msg.audioUrl}
+              playAudio={playAudio}
+              type={msg.type || "text"}
+              voiceAudioBlob={msg.voiceAudioBlob}
+              voiceDuration={msg.voiceDuration}
+              userInitial={userInitial}
+            />
+          ))}
+          <div ref={chatEndRef} />
+        </div>
       )}
-
-      <div ref={chatEndRef} />
     </div>
   );
 }
 
-export default ChatWindow;
+export default ChatWindow;

@@ -1,16 +1,102 @@
-from dotenv import load_dotenv
+import logging
 import os
+
+from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 
-def clean_str(val: str, default: str = "") -> str:
+
+def clean_str(val: str | None, default: str = "") -> str:
     if not val:
         return default
     return val.strip().strip('"').strip("'")
 
 
+def clean_int(val: str | None, default: int, minimum: int | None = None) -> int:
+    try:
+        parsed = int(clean_str(val, str(default)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid integer configuration value %r; using %s", val, default)
+        return default
+
+    if minimum is not None and parsed < minimum:
+        logger.warning(
+            "Configuration value %r is below the minimum %s; using %s",
+            val,
+            minimum,
+            default,
+        )
+        return default
+    return parsed
+
+
+def clean_float(
+    val: str | None,
+    default: float,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    try:
+        parsed = float(clean_str(val, str(default)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid numeric configuration value %r; using %s", val, default)
+        return default
+
+    if minimum is not None and parsed < minimum:
+        logger.warning(
+            "Configuration value %r is below the minimum %s; using %s",
+            val,
+            minimum,
+            default,
+        )
+        return default
+    if maximum is not None and parsed > maximum:
+        logger.warning(
+            "Configuration value %r is above the maximum %s; using %s",
+            val,
+            maximum,
+            default,
+        )
+        return default
+    return parsed
+
+
+def clean_bool(val: str | None, default: bool) -> bool:
+    normalized = clean_str(val).lower()
+    if not normalized:
+        return default
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    logger.warning("Invalid boolean configuration value %r; using %s", val, default)
+    return default
+
+
+def clean_origins(val: str | None, default: str) -> list[str]:
+    origins = [origin.strip().rstrip("/") for origin in clean_str(val).split(",")]
+    return [origin for origin in origins if origin] or [default.rstrip("/")]
+
+
+DEFAULT_TTS_INSTRUCTIONS = (
+    "Speak in a warm, calm, confident, slightly deep male voice with a clear neutral "
+    "international English accent. Use a natural conversational cadence at a medium "
+    "pace, with subtle sophistication and natural pauses. Sound professional and "
+    "composed, never robotic, announcer-like, overly cheerful, or bass-heavy."
+)
+
+
 class Settings:
+    # Frontend / deployment
+    FRONTEND_URL: str = clean_str(os.getenv("FRONTEND_URL"), "http://localhost:5173").rstrip("/")
+    CORS_ORIGINS: list[str] = clean_origins(
+        os.getenv("CORS_ORIGINS"),
+        FRONTEND_URL,
+    )
+
     # OpenRouter API
     OPENROUTER_API_KEY: str = clean_str(os.getenv("OPENROUTER_API_KEY"))
     OPENROUTER_MODEL: str = clean_str(os.getenv("OPENROUTER_MODEL"), "google/gemini-2.0-flash-001")
@@ -26,13 +112,84 @@ class Settings:
     # Google Gemini API
     GEMINI_API_KEY: str = clean_str(os.getenv("GEMINI_API_KEY"))
 
-    # TTS / Speech Synthesis Keys
+    # TTS / Speech Synthesis
     ELEVENLABS_API_KEY: str = clean_str(os.getenv("ELEVENLABS_API_KEY"))
+    ELEVENLABS_VOICE_ID: str = clean_str(
+        os.getenv("ELEVENLABS_VOICE_ID"),
+        "JBFqnCBsd6RMkjVDRZzb",  # George
+    )
+    ELEVENLABS_MODEL_ID: str = clean_str(
+        os.getenv("ELEVENLABS_MODEL_ID"),
+        "eleven_multilingual_v2",
+    )
+    ELEVENLABS_STABILITY: float = clean_float(
+        os.getenv("ELEVENLABS_STABILITY"),
+        default=0.62,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    ELEVENLABS_SIMILARITY_BOOST: float = clean_float(
+        os.getenv("ELEVENLABS_SIMILARITY_BOOST"),
+        default=0.78,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    ELEVENLABS_STYLE: float = clean_float(
+        os.getenv("ELEVENLABS_STYLE"),
+        default=0.08,
+        minimum=0.0,
+        maximum=1.0,
+    )
+    ELEVENLABS_USE_SPEAKER_BOOST: bool = clean_bool(
+        os.getenv("ELEVENLABS_USE_SPEAKER_BOOST"),
+        default=True,
+    )
+    ELEVENLABS_SPEED: float = clean_float(
+        os.getenv("ELEVENLABS_SPEED"),
+        default=1.0,
+        minimum=0.7,
+        maximum=1.2,
+    )
+
+    # Bytez TTS uses its model API, not OpenAI's /v1/audio/speech endpoint.
+    # Leave it disabled until a runnable Bytez text-to-speech model ID is set.
+    BYTEZ_TTS_MODEL: str = clean_str(os.getenv("BYTEZ_TTS_MODEL"))
+    BYTEZ_TTS_VOICE: str = clean_str(os.getenv("BYTEZ_TTS_VOICE"))
+    BYTEZ_TTS_SPEED: float = clean_float(
+        os.getenv("BYTEZ_TTS_SPEED"),
+        default=1.0,
+        minimum=0.25,
+        maximum=4.0,
+    )
+
     TTS_API_KEY: str = clean_str(os.getenv("TTS_API_KEY"))
     TTS_BASE_URL: str = clean_str(os.getenv("TTS_BASE_URL"))
+    TTS_MODEL: str = clean_str(os.getenv("TTS_MODEL"), "gpt-4o-mini-tts")
+    TTS_VOICE: str = clean_str(os.getenv("TTS_VOICE"), "ash")
+    TTS_SPEED: float = clean_float(
+        os.getenv("TTS_SPEED"),
+        default=1.0,
+        minimum=0.25,
+        maximum=4.0,
+    )
+    TTS_INSTRUCTIONS: str = clean_str(
+        os.getenv("TTS_INSTRUCTIONS"),
+        DEFAULT_TTS_INSTRUCTIONS,
+    )
 
     # Chat context window
-    MAX_HISTORY_MESSAGES: int = int(clean_str(os.getenv("MAX_HISTORY_MESSAGES"), "10"))
+    MAX_HISTORY_MESSAGES: int = clean_int(
+        os.getenv("MAX_HISTORY_MESSAGES"),
+        default=10,
+        minimum=0,
+    )
+
+    # Generated audio retention
+    AUDIO_MAX_AGE_SECONDS: int = clean_int(
+        os.getenv("AUDIO_MAX_AGE_SECONDS"),
+        default=3600,
+        minimum=0,
+    )
 
 
 settings = Settings()
@@ -56,10 +213,24 @@ else:
 active_tts = []
 if settings.ELEVENLABS_API_KEY and not settings.ELEVENLABS_API_KEY.startswith("your_"):
     active_tts.append("ElevenLabs")
-if settings.BYTEZ_API_KEY and not settings.BYTEZ_API_KEY.startswith("your_"):
+if (
+    settings.BYTEZ_API_KEY
+    and not settings.BYTEZ_API_KEY.startswith("your_")
+    and settings.BYTEZ_TTS_MODEL
+):
     active_tts.append("Bytez.com Audio API")
 if settings.TTS_API_KEY and not settings.TTS_API_KEY.startswith("your_"):
     active_tts.append("Custom Audio API")
 active_tts.append("gTTS (Free Fallback)")
 
 print(f"[TTS CONFIG] Active Audio Engine(s): {', '.join(active_tts)}")
+
+if (
+    settings.BYTEZ_API_KEY
+    and not settings.BYTEZ_API_KEY.startswith("your_")
+    and not settings.BYTEZ_TTS_MODEL
+):
+    print(
+        "[TTS CONFIG] Bytez key detected, but Bytez TTS is disabled because "
+        "BYTEZ_TTS_MODEL is not configured."
+    )

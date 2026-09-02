@@ -92,6 +92,9 @@ def save_memories(
 
 
 def extract_json(text: str) -> dict:
+    if not isinstance(text, str):
+        raise TypeError("LLM response must be text")
+
     text = text.strip()
 
     if text.startswith("```json"):
@@ -103,7 +106,10 @@ def extract_json(text: str) -> dict:
     if text.endswith("```"):
         text = text[:-3]
 
-    return json.loads(text.strip())
+    data = json.loads(text.strip())
+    if not isinstance(data, dict):
+        raise ValueError("LLM response JSON must be an object")
+    return data
 
 
 def delete_memories(
@@ -136,4 +142,4 @@ def clear_memories(
         (session_id,),
     )
     conn.commit()
-    conn.close()
+    conn.close()

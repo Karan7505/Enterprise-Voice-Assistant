@@ -1,3 +1,5 @@
+import logging
+
 from openai import OpenAI
 from google import genai
 from google.genai import types
@@ -5,14 +7,24 @@ from google.genai.errors import ClientError
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 class LLMError(Exception):
     pass
 
 
+def unique_models(*models: str) -> list[str]:
+    return list(dict.fromkeys(model for model in models if model))
+
+
 def generate_with_openrouter(prompt: str) -> str:
     key = settings.OPENROUTER_API_KEY
-    models_to_try = [settings.OPENROUTER_MODEL, "google/gemini-2.0-flash-001", "meta-llama/llama-3.3-70b-instruct"]
+    models_to_try = unique_models(
+        settings.OPENROUTER_MODEL,
+        "google/gemini-2.0-flash-001",
+        "meta-llama/llama-3.3-70b-instruct",
+    )
     last_err = None
 
     client = OpenAI(
@@ -20,7 +32,7 @@ def generate_with_openrouter(prompt: str) -> str:
         api_key=key,
         default_headers={
             "Authorization": f"Bearer {key}",
-            "HTTP-Referer": "http://localhost:5173",
+            "HTTP-Referer": settings.FRONTEND_URL,
             "X-Title": "Enterprise Voice Assistant",
         },
     )
@@ -50,7 +62,11 @@ def generate_with_openrouter(prompt: str) -> str:
 
 def generate_with_bytez(prompt: str) -> str:
     key = settings.BYTEZ_API_KEY
-    models_to_try = [settings.BYTEZ_MODEL, "meta-llama/Llama-3.3-70B-Instruct", "Qwen/Qwen2.5-7B-Instruct"]
+    models_to_try = unique_models(
+        settings.BYTEZ_MODEL,
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "Qwen/Qwen2.5-7B-Instruct",
+    )
     last_err = None
 
     client = OpenAI(
@@ -110,43 +126,43 @@ def generate_with_gemini(prompt: str) -> str:
 
 
 def generate(prompt: str) -> str:
-    errors = []
+    failed_providers = []
 
     # Provider 1: OpenRouter
     if settings.OPENROUTER_API_KEY and not settings.OPENROUTER_API_KEY.startswith("your_"):
         try:
             return generate_with_openrouter(prompt)
-        except Exception as e:
-            print(f"[OpenRouter Error]: {e}")
-            errors.append(f"OpenRouter: {e}")
+        except Exception:
+            logger.exception("OpenRouter request failed")
+            failed_providers.append("OpenRouter")
 
     # Provider 2: Bytez.com
     if settings.BYTEZ_API_KEY and not settings.BYTEZ_API_KEY.startswith("your_"):
         try:
             return generate_with_bytez(prompt)
-        except Exception as e:
-            print(f"[Bytez.com Error]: {e}")
-            errors.append(f"Bytez.com: {e}")
+        except Exception:
+            logger.exception("Bytez.com request failed")
+            failed_providers.append("Bytez.com")
 
     # Provider 3: NVIDIA NIM
     if settings.NVIDIA_API_KEY and not settings.NVIDIA_API_KEY.startswith("your_"):
         try:
             return generate_with_nvidia(prompt)
-        except Exception as e:
-            print(f"[NVIDIA Error]: {e}")
-            errors.append(f"NVIDIA: {e}")
+        except Exception:
+            logger.exception("NVIDIA request failed")
+            failed_providers.append("NVIDIA")
 
     # Provider 4: Direct Google Gemini
     if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your_"):
         try:
             return generate_with_gemini(prompt)
-        except Exception as e:
-            print(f"[Gemini Error]: {e}")
-            errors.append(f"Gemini: {e}")
+        except Exception:
+            logger.exception("Gemini request failed")
+            failed_providers.append("Gemini")
 
-    if errors:
-        raise LLMError(f"LLM API providers failed: {'; '.join(errors)}")
+    if failed_providers:
+        logger.error("All configured LLM providers failed: %s", ", ".join(failed_providers))
+        raise LLMError("All configured LLM providers failed")
 
-    raise LLMError(
-        "No LLM API Key configured! Please add OPENROUTER_API_KEY, BYTEZ_API_KEY, NVIDIA_API_KEY, or GEMINI_API_KEY to your .env file."
-    )
+    logger.error("No LLM API key is configured")
+    raise LLMError("No LLM provider is configured")

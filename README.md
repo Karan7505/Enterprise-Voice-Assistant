@@ -1,15 +1,15 @@
 <div align="center">
 
-# 🎙️ Enterprise Voice Assistant
+# VOICE ASSISTANT
 
-**A production-ready AI voice assistant with persistent long-term memory, WhatsApp-style voice notes, and a stunning glassmorphic UI.**
+**A production-ready AI voice assistant with persistent long-term memory, voice notes, and a premium voice-first interface.**
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.140-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
 [![Vite](https://img.shields.io/badge/Vite-6-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev)
-[![Google Gemini](https://img.shields.io/badge/Gemini-Flash-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
-[![ElevenLabs](https://img.shields.io/badge/ElevenLabs-TTS-FF6B35?style=for-the-badge)](https://elevenlabs.io)
+[![LLM](https://img.shields.io/badge/LLM-Multi--Provider-4285F4?style=for-the-badge)](#-tech-stack)
+[![TTS](https://img.shields.io/badge/TTS-Multi--Provider-FF6B35?style=for-the-badge)](#-tech-stack)
 [![SQLite](https://img.shields.io/badge/SQLite-Memory-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
@@ -44,7 +44,7 @@ The AI **automatically extracts facts** from every conversation and stores them 
 <td width="50%">
 
 ### 🔊 AI Voice Replies
-Every AI response is **synthesized to natural speech** using ElevenLabs' multilingual model. Responses play automatically so you can have a fully hands-free conversation with your enterprise assistant.
+AI replies are synthesized through an ordered fallback chain: **ElevenLabs**, **Bytez Audio**, a custom OpenAI-compatible TTS endpoint, then **gTTS**. Text replies still succeed when every TTS provider is unavailable.
 
 </td>
 <td width="50%">
@@ -63,8 +63,8 @@ A slide-out panel that shows **all stored memories in real time** as key-value c
 </td>
 <td width="50%">
 
-### 🌑 Premium Glassmorphic UI
-A stunning dark-mode interface with **backdrop blur, gradient meshes, micro-animations, and a pulsing audio visualizer**. Built with vanilla CSS — no frameworks, just pure precision.
+### Premium Voice-First UI
+A warm ivory interface with a centered JARVIS workspace, a floating composer, an on-demand memory drawer, and a clean orange orb with distinct idle, listening, thinking, and speaking states.
 
 </td>
 </tr>
@@ -94,8 +94,8 @@ Enterprise-Voice-Assistant/
 │   │   └── chat_prompt.py               # Memory-aware enterprise system prompt
 │   │
 │   └── 📂 services/
-│       ├── llm_service.py               # Gemini API wrapper (JSON mode + model fallback)
-│       ├── tts_service.py               # ElevenLabs TTS → .mp3 file
+│       ├── llm_service.py               # OpenRouter, Bytez, NVIDIA, and Gemini fallbacks
+│       ├── tts_service.py               # Multi-provider TTS + generated .mp3 cleanup
 │       ├── memory_service.py            # SQLite CRUD for long-term memories
 │       ├── database_chat_history.py     # SQLite CRUD for conversation history
 │       ├── context_builder.py           # Loads memory context at session start
@@ -111,8 +111,9 @@ Enterprise-Voice-Assistant/
 │           ├── ChatWindow.jsx           # Scrollable message list
 │           ├── MessageBubble.jsx        # Text bubble OR voice note bubble (WhatsApp-style)
 │           ├── ChatInput.jsx            # Textarea + MediaRecorder mic + SpeechRecognition
-│           ├── AudioVisualizer.jsx      # Animated orb (listening / playing states)
-│           └── MemorySidebar.jsx        # Slide-out memory panel with search + clear
+│           ├── AudioVisualizer.jsx      # Four-state animated assistant orb
+│           ├── Icon.jsx                 # Shared thin-line SVG icon set
+│           └── MemorySidebar.jsx        # On-demand memory drawer with search + reset
 │
 ├── .env.example                         # API key template (copy → .env)
 ├── requirements.txt                     # Python dependencies
@@ -140,17 +141,18 @@ Transcript sent silently to FastAPI /chat
 session_service.py
     ├── Loads stored memories from SQLite
     ├── Builds prompt: memories + history + message
-    └── Calls Gemini (JSON mode enforced)
+    └── Calls the configured LLM providers in fallback order
             │
             ▼
         {
           "reply": "Your name is Karan!",
-          "memories": { "name": "Karan" }
+          "memories": { "name": "Karan" },
+          "delete_memories": []
         }
             │
             ├── Save new memories → SQLite
             ├── Save message + reply → SQLite
-            └── Generate speech → ElevenLabs → .mp3
+            └── Generate speech through the TTS fallback chain → .mp3
                     │
                     ▼
               Frontend receives reply + audio_url + memories
@@ -170,15 +172,15 @@ session_service.py
 |---|---|
 | Python | 3.11 or higher |
 | Node.js | 18 or higher |
-| [Google Gemini API Key](https://aistudio.google.com/apikey) | Free tier available |
-| [ElevenLabs API Key](https://elevenlabs.io) | Free tier available |
+| LLM API key | At least one of OpenRouter, Bytez, NVIDIA NIM, or Google Gemini |
+| TTS API key | Optional; gTTS is the no-key fallback |
 
 ---
 
 ### Step 1 — Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Enterprise-Voice-Assistant.git
+git clone https://github.com/Karan7505/Enterprise-Voice-Assistant.git
 cd Enterprise-Voice-Assistant
 ```
 
@@ -188,12 +190,30 @@ cd Enterprise-Voice-Assistant
 cp .env.example .env
 ```
 
-Open `.env` and fill in your keys:
+Open `.env` and fill in at least one LLM key. TTS keys are optional:
 
 ```env
-GEMINI_API_KEY=your_gemini_api_key_here
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_MODEL=google/gemini-2.0-flash-001
 ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+ELEVENLABS_VOICE_ID=JBFqnCBsd6RMkjVDRZzb
+FRONTEND_URL=http://localhost:5173
+CORS_ORIGINS=http://localhost:5173
 ```
+
+The default voice profile favors a warm, calm, confident male delivery at a
+natural medium pace. ElevenLabs exposes precise controls through its voice ID
+and stability/style settings. Bytez TTS uses Bytez model IDs and model-specific
+voice parameters; it is skipped unless `BYTEZ_TTS_MODEL` is explicitly set.
+The custom OpenAI-compatible path defaults to `gpt-4o-mini-tts` with the `ash`
+voice and receives the conversational JARVIS delivery instructions from
+`TTS_INSTRUCTIONS`; hearing `ash` requires a valid `TTS_API_KEY`. A Bytez API
+key by itself does not provide that OpenAI voice. All values are configurable in `.env.example`, and the
+fallback order remains ElevenLabs, Bytez, custom TTS, then gTTS.
+
+> Voice character is provider- and voice-dependent. Audition an available male
+> voice and set `ELEVENLABS_VOICE_ID` for the closest neutral-English match.
+> gTTS is retained for availability but cannot control voice identity or style.
 
 > ⚠️ **Never commit your `.env` file.** It is already in `.gitignore`.
 
@@ -232,6 +252,8 @@ npm run dev
 
 Open **`http://localhost:5173`** in your browser (Chrome or Edge recommended for Web Speech API support).
 
+Local development automatically uses `http://localhost:8000` from `frontend/.env.development`. For a separate deployment, set `VITE_API_BASE_URL` to the public backend URL in the hosting environment; leave it empty when a reverse proxy serves frontend and API from one origin.
+
 ---
 
 ## 📡 API Reference
@@ -252,7 +274,7 @@ Send a message and receive an AI reply with audio and updated memories.
 ```json
 {
   "reply": "Great to meet you, Karan! As a software architect at Google, you must be working on some fascinating systems. How can I assist you today?",
-  "audio_url": "/audio/a3f92b1c.mp3",
+  "audio_url": "/audio/a3f92b1c40d24b6bbcbf6bf2d624ba91.mp3",
   "memories": {
     "name": "Karan",
     "company": "Google",
@@ -268,6 +290,8 @@ Send a message and receive an AI reply with audio and updated memories.
 | `POST` | `/chat` | Send a message → get reply + audio URL + updated memories |
 | `GET` | `/memories` | Fetch all stored long-term memories for the session |
 | `GET` | `/history` | Fetch full conversation history for the session |
+| `POST` | `/clear-chat` | Clear conversation history while preserving long-term memories |
+| `POST` | `/clear-memories` | Clear long-term memories while preserving chat history |
 | `POST` | `/clear` | Wipe all history and memories (fresh start) |
 | `GET` | `/status` | Health check — returns engine names and status |
 | `GET` | `/audio/{filename}` | Stream a generated TTS audio file |
@@ -276,10 +300,10 @@ Send a message and receive an AI reply with audio and updated memories.
 
 ## 🧠 How Memory Works
 
-The assistant uses a **two-phase JSON extraction pipeline** to make memory reliable:
+The assistant uses structured model output plus validation to keep memory updates controlled:
 
-### 1. Strict JSON Mode
-Gemini is called with `response_mime_type="application/json"` enforced at the API level — the model *cannot* return plain text. This eliminates all JSON parsing failures.
+### 1. Structured JSON with safe validation
+Providers are asked for a JSON object containing `reply`, `memories`, and `delete_memories`. The backend validates the shape before changing history or memory. Malformed output is logged server-side and returned as a generic temporary-unavailable response instead of an uncontrolled 500.
 
 ### 2. Memory-Aware Prompt
 Every request injects the **full memory store** into the system prompt so the AI can reference what it already knows:
@@ -304,10 +328,11 @@ If the user says something new, the model extracts it:
 ```json
 User: "I just moved to New York"
 
-Gemini returns:
+The active LLM returns:
 {
   "reply": "New York is a fantastic city! How are you settling in?",
-  "memories": { "location": "New York" }
+  "memories": { "location": "New York" },
+  "delete_memories": []
 }
 ```
 The `location` memory is then **upserted** in SQLite — overwriting "California" with "New York".
@@ -319,6 +344,8 @@ Memories survive:
 - ✅ New browser sessions
 
 Because they live in **SQLite**, not in-memory state.
+
+Only the most recent `MAX_HISTORY_MESSAGES` are sent back to the model for conversational context (default `10`; `0` means all), while the full chat history remains in SQLite. `/clear-chat` and `/clear-memories` deliberately reset those stores independently.
 
 ---
 
@@ -336,6 +363,8 @@ When you press **Stop**:
 2. The transcript is **silently sent to the AI** — it never appears as text in the chat.
 3. The AI processes the transcript as a normal message and replies.
 
+Voice-note object URLs are created only for playback and revoked on completion, failure, or component cleanup. Recorder tracks, speech recognition, timers, and playback objects are also stopped when their components unmount.
+
 This mirrors exactly how WhatsApp works: you see the audio file, not the transcription.
 
 ---
@@ -344,12 +373,12 @@ This mirrors exactly how WhatsApp works: you see the audio file, not the transcr
 
 | Layer | Technology | Purpose |
 |---|---|---|
-| **LLM** | Google Gemini Flash | Natural language understanding + memory extraction |
-| **TTS** | ElevenLabs (George voice) | Text-to-speech for AI replies |
+| **LLM** | OpenRouter → Bytez → NVIDIA NIM → Google Gemini | Natural language understanding + memory extraction with provider fallback |
+| **TTS** | ElevenLabs → Bytez Audio → custom OpenAI-compatible TTS → gTTS | Text-to-speech with graceful fallback |
 | **Backend Framework** | FastAPI + Uvicorn | REST API server |
 | **Database** | SQLite | Zero-config persistent storage for memories + history |
 | **Frontend Framework** | React 18 + Vite | Component-based UI with fast HMR |
-| **Styling** | Vanilla CSS | Glassmorphism, CSS variables, custom animations |
+| **Styling** | Vanilla CSS | Responsive light-mode system, CSS variables, and stateful orb animations |
 | **Voice Recording** | MediaRecorder API | Audio capture for voice notes |
 | **Speech-to-Text** | Web Speech API | Real-time transcription in the browser |
 | **HTTP Client** | Axios | Frontend → Backend API calls |
@@ -372,8 +401,9 @@ This mirrors exactly how WhatsApp works: you see the audio file, not the transcr
 ## 🔒 Security & Production Notes
 
 - **API Keys**: Loaded exclusively from `.env` — never hardcoded. The `.env` file is in `.gitignore`.
-- **CORS**: Restricted to `localhost:5173` by default. Update `allow_origins` in `app/main.py` for your production domain.
-- **Audio Files**: Stored in the `audio/` directory (gitignored). Consider adding a cleanup cron job for old files in production.
+- **CORS and OpenRouter attribution**: Set `FRONTEND_URL` to the exact deployed frontend origin. `CORS_ORIGINS` accepts a comma-separated allowlist and defaults to `FRONTEND_URL`; OpenRouter uses `FRONTEND_URL` as its referer.
+- **Frontend API URL**: Set `VITE_API_BASE_URL` at frontend build time when the API is hosted on another origin.
+- **Audio Files**: Generated files are stored in the gitignored `audio/` directory. Partial files are removed immediately after provider failures, and completed `.mp3` files older than `AUDIO_MAX_AGE_SECONDS` (default one hour) are cleaned at startup and before generation.
 - **SQLite**: Suitable for single-user/small team deployments. For multi-user production, migrate to PostgreSQL.
 
 ---
@@ -399,7 +429,7 @@ This project is licensed under the **MIT License** — free to use, modify, and 
 
 <div align="center">
 
-Built with ❤️ using **Google Gemini** · **ElevenLabs** · **FastAPI** · **React**
+Built with ❤️ using **multi-provider LLM/TTS fallbacks** · **FastAPI** · **React** · **SQLite**
 
 *If this project helped you, consider giving it a ⭐ on GitHub!*
 

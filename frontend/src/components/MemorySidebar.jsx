@@ -1,10 +1,29 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Icon from "./Icon";
 
-function MemorySidebar({ memories, isOpen, toggleSidebar, onClearMemories, onClearSession }) {
+function MemorySidebar({
+  memories,
+  isOpen,
+  toggleSidebar,
+  onClearMemories,
+  isClearDisabled = false,
+}) {
   const [filter, setFilter] = useState("");
-  const [copiedKey, setCopiedKey] = useState(null);
+  const [copyState, setCopyState] = useState({ key: null, status: "idle" });
+  const copyTimerRef = useRef(null);
 
-  const clearHandler = onClearMemories || onClearSession;
+  useEffect(() => () => clearTimeout(copyTimerRef.current), []);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const handleEscape = (event) => {
+      if (event.key === "Escape") toggleSidebar();
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [isOpen, toggleSidebar]);
 
   const memoryKeys = Object.keys(memories || {});
   const filteredKeys = memoryKeys.filter((key) =>
@@ -12,75 +31,133 @@ function MemorySidebar({ memories, isOpen, toggleSidebar, onClearMemories, onCle
     String(memories[key]).toLowerCase().includes(filter.toLowerCase())
   );
 
-  const copyToClipboard = (key, value) => {
-    navigator.clipboard.writeText(`${key}: ${value}`);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 2000);
+  const copyToClipboard = async (key, value) => {
+    clearTimeout(copyTimerRef.current);
+    try {
+      if (!navigator.clipboard) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(`${key}: ${value}`);
+      setCopyState({ key, status: "copied" });
+    } catch (error) {
+      console.error("Clipboard copy failed:", error);
+      setCopyState({ key, status: "error" });
+    }
+    copyTimerRef.current = setTimeout(
+      () => setCopyState({ key: null, status: "idle" }),
+      2000,
+    );
   };
 
   return (
-    <aside className={`memory-sidebar ${isOpen ? "open" : "closed"}`}>
-      <div className="sidebar-header">
-        <div className="sidebar-title">
-          <svg className="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
-          </svg>
-          <h2>Extracted Memories</h2>
-          <span className="memory-badge">{memoryKeys.length}</span>
-        </div>
-        <button className="toggle-btn" onClick={toggleSidebar} title="Close Sidebar">
-          ✕
-        </button>
-      </div>
-
-      <div className="sidebar-search">
-        <input
-          type="text"
-          placeholder="Filter memories..."
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+    <>
+      {isOpen && (
+        <button
+          type="button"
+          className="memory-backdrop"
+          onClick={toggleSidebar}
+          aria-label="Close memory drawer"
         />
-      </div>
+      )}
 
-      <div className="memories-container">
-        {memoryKeys.length === 0 ? (
-          <div className="empty-memories">
-            <div className="empty-icon">🧠</div>
-            <p>No long-term facts extracted yet.</p>
-            <span>Mention facts like your name, role, or preferences in chat!</span>
-          </div>
-        ) : filteredKeys.length === 0 ? (
-          <div className="empty-memories">
-            <p>No matching memories found.</p>
-          </div>
-        ) : (
-          filteredKeys.map((key) => (
-            <div key={key} className="memory-card">
-              <div className="memory-card-header">
-                <span className="memory-key">{key}</span>
-                <button
-                  className="copy-btn"
-                  onClick={() => copyToClipboard(key, memories[key])}
-                  title="Copy memory"
-                >
-                  {copiedKey === key ? "✓" : "📋"}
-                </button>
-              </div>
-              <div className="memory-value">{String(memories[key])}</div>
+      <aside
+        className={`memory-sidebar ${isOpen ? "open" : "closed"}`}
+        role="dialog"
+        aria-modal={isOpen ? "true" : undefined}
+        aria-labelledby="memory-drawer-title"
+        aria-hidden={!isOpen}
+      >
+        <div className="sidebar-header">
+          <div className="sidebar-title">
+            <Icon name="memory" size={20} />
+            <div>
+              <span className="sidebar-eyebrow">Personal context</span>
+              <h2 id="memory-drawer-title">Memory</h2>
             </div>
-          ))
-        )}
-      </div>
+            <span className="memory-badge" aria-label={`${memoryKeys.length} saved memories`}>
+              {memoryKeys.length}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="toggle-btn"
+            onClick={toggleSidebar}
+            title="Close memory drawer"
+            aria-label="Close memory drawer"
+            tabIndex={isOpen ? 0 : -1}
+          >
+            <Icon name="close" size={20} />
+          </button>
+        </div>
 
-      <div className="sidebar-footer">
-        <button className="clear-session-btn" onClick={clearHandler} title="Delete extracted memories while keeping chat history">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-          </svg>
-          Reset Long-Term Memories
-        </button>
-      </div>
-    </aside>
+        <div className="sidebar-search">
+          <Icon name="search" size={17} />
+          <input
+            type="search"
+            placeholder="Search saved details"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            aria-label="Search memories"
+            tabIndex={isOpen ? 0 : -1}
+          />
+        </div>
+
+        <div className="memories-container">
+          {memoryKeys.length === 0 ? (
+            <div className="empty-memories">
+              <div className="empty-icon" aria-hidden="true">
+                <Icon name="memory" size={28} />
+              </div>
+              <p>No saved details yet</p>
+              <span>Share a preference or detail and it can appear here.</span>
+            </div>
+          ) : filteredKeys.length === 0 ? (
+            <div className="empty-memories">
+              <p>No matching memories</p>
+              <span>Try a different search.</span>
+            </div>
+          ) : (
+            filteredKeys.map((key) => {
+              const isCopied = copyState.key === key && copyState.status === "copied";
+              const hasCopyError = copyState.key === key && copyState.status === "error";
+
+              return (
+                <div key={key} className="memory-card">
+                  <div className="memory-card-header">
+                    <span className="memory-key">{key}</span>
+                    <button
+                      type="button"
+                      className="copy-btn"
+                      onClick={() => copyToClipboard(key, memories[key])}
+                      title={isCopied ? "Copied" : hasCopyError ? "Copy failed" : "Copy memory"}
+                      aria-label={isCopied ? `${key} copied` : hasCopyError ? `Could not copy ${key}` : `Copy ${key}`}
+                      tabIndex={isOpen ? 0 : -1}
+                    >
+                      <Icon name={isCopied ? "check" : hasCopyError ? "alert" : "copy"} size={15} />
+                    </button>
+                  </div>
+                  <div className="memory-value">{String(memories[key])}</div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="sidebar-footer">
+          <button
+            type="button"
+            className="clear-session-btn"
+            onClick={onClearMemories}
+            disabled={isClearDisabled}
+            title="Delete saved memories while keeping this conversation"
+            tabIndex={isOpen ? 0 : -1}
+          >
+            <Icon name="trash" size={16} />
+            Reset memory
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }
 

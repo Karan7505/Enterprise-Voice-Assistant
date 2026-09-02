@@ -6,80 +6,291 @@ import ChatWindow from "./components/ChatWindow";
 import ChatInput from "./components/ChatInput";
 import MemorySidebar from "./components/MemorySidebar";
 import AudioVisualizer from "./components/AudioVisualizer";
+import Icon from "./components/Icon";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+const DEFAULT_INITIAL_IDLE_DELAY_MS = 500;
+const DEFAULT_JARVIS_IDLE_DELAY_MS = 15_000;
+const CHAT_REQUEST_TIMEOUT_MS = 60_000;
+const CLEAR_REQUEST_TIMEOUT_MS = 15_000;
+
+const parseDelay = (rawValue, fallback, minimum) => {
+  if (typeof rawValue !== "string" || !rawValue.trim()) return fallback;
+  const parsedValue = Number(rawValue);
+  return Number.isFinite(parsedValue) && parsedValue >= 0
+    ? Math.max(minimum, Math.round(parsedValue))
+    : fallback;
+};
+
+const INITIAL_IDLE_DELAY_MS = parseDelay(
+  import.meta.env.VITE_JARVIS_INITIAL_IDLE_DELAY_MS,
+  DEFAULT_INITIAL_IDLE_DELAY_MS,
+  250,
+);
+const JARVIS_IDLE_DELAY_MS = parseDelay(
+  import.meta.env.VITE_JARVIS_IDLE_DELAY_MS,
+  DEFAULT_JARVIS_IDLE_DELAY_MS,
+  1_000,
+);
+
+const releaseAudioElement = (audioRef) => {
+  const audio = audioRef.current;
+  if (!audio) return;
+
+  audio.pause();
+  audio.onplay = null;
+  audio.onended = null;
+  audio.onerror = null;
+  audio.removeAttribute("src");
+  audio.load();
+  audioRef.current = null;
+};
+
+const postClearRequest = (route) =>
+  axios.post(`${API_BASE}${route}`, undefined, {
+    timeout: CLEAR_REQUEST_TIMEOUT_MS,
+  });
+
+const createMessageId = () =>
+  globalThis.crypto?.randomUUID?.() ||
+  `message-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+// The assistant stores the user's name under canonical keys; accept common
+// variations so the greeting and monogram avatar use the real first initial.
+const NAME_MEMORY_KEYS = [
+  "name",
+  "user_name",
+  "full_name",
+  "first_name",
+  "display_name",
+  "my_name",
+];
+
+const getStoredUserName = (memories) => {
+  if (!memories || typeof memories !== "object") return "";
+  for (const key of NAME_MEMORY_KEYS) {
+    const value = memories[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return "";
+};
 
 function App() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
   const [memories, setMemories] = useState({});
-  const [statusInfo, setStatusInfo] = useState({
-    llm_engine: "Multi-Provider AI",
-    tts_engine: "Voice Engine",
-  });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [voiceLevel, setVoiceLevel] = useState(0);
+  const [pendingRequests, setPendingRequests] = useState(0);
+  const [chatScrollable, setChatScrollable] = useState(false);
+  const [conversationStarted, setConversationStarted] = useState(false);
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
+  const [isAmbientIdle, setIsAmbientIdle] = useState(false);
+  const [isPageVisible, setIsPageVisible] = useState(
+    () => document.visibilityState === "visible",
+  );
+  const [isRecordingIntent, setIsRecordingIntent] = useState(false);
+  const [isClearingConversation, setIsClearingConversation] = useState(false);
+  const [isFullResetting, setIsFullResetting] = useState(false);
+  const [resetEpoch, setResetEpoch] = useState(0);
+  const [idleCycle, setIdleCycle] = useState(0);
   const audioRef = useRef(null);
+  const sessionEpochRef = useRef(0);
+  const activeChatRequestsRef = useRef(new Set());
+  const clearedSectionsRef = useRef({ conversation: false, memory: false });
+  const conversationClearInFlightRef = useRef(false);
+  const fullResetInFlightRef = useRef(false);
+  const isOrbHidden = messages.length > 0 && chatScrollable;
+  const isJarvisBusy =
+    message.length > 0 ||
+    isRecordingIntent ||
+    isListening ||
+    pendingRequests > 0 ||
+    isPlaying ||
+    isClearingConversation ||
+    isFullResetting;
+  const isResetControlDisabled =
+    isClearingConversation || isFullResetting;
+  const ambientEnabled =
+    initialDataLoaded &&
+    isAmbientIdle &&
+    !isJarvisBusy &&
+    !isOrbHidden &&
+    isPageVisible;
 
-  // Load chat history, memories & engine status on mount
+  const storedName = getStoredUserName(memories);
+  const userName = typeof storedName === "string"
+    ? storedName.trim().replace(/\s+/g, " ").slice(0, 80)
+    : "";
+
+  // Restore persisted server state before allowing the idle sound. This avoids
+  // briefly treating an existing conversation as a fresh, empty session.
   useEffect(() => {
-    fetchInitialData();
+    let cancelled = false;
+    const loadEpoch = sessionEpochRef.current;
+
+    const fetchInitialData = async () => {
+      try {
+        const [histRes, memRes] = await Promise.all([
+          axios.get(`${API_BASE}/history`).catch(() => ({ data: { messages: [] } })),
+          axios.get(`${API_BASE}/memories`).catch(() => ({ data: { memories: {} } })),
+        ]);
+
+        if (cancelled || loadEpoch !== sessionEpochRef.current) return;
+
+        const history = Array.isArray(histRes.data?.messages)
+          ? histRes.data.messages
+          : [];
+        setMessages(
+          history.map((item) => ({
+            ...item,
+            id: item.id || createMessageId(),
+          })),
+        );
+        setConversationStarted(
+          history.some((item) => item.sender === "You"),
+        );
+        setMemories(
+          memRes.data?.memories && typeof memRes.data.memories === "object"
+            ? memRes.data.memories
+            : {},
+        );
+      } catch (err) {
+        if (!cancelled && loadEpoch === sessionEpochRef.current) {
+          console.error("Failed to load initial assistant data", err);
+        }
+      } finally {
+        if (!cancelled && loadEpoch === sessionEpochRef.current) {
+          setInitialDataLoaded(true);
+        }
+      }
+    };
+
+    void fetchInitialData();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const fetchInitialData = async () => {
-    try {
-      const [histRes, memRes, statusRes] = await Promise.all([
-        axios.get(`${API_BASE}/history`).catch(() => ({ data: { messages: [] } })),
-        axios.get(`${API_BASE}/memories`).catch(() => ({ data: { memories: {} } })),
-        axios.get(`${API_BASE}/status`).catch(() => ({ data: {} })),
-      ]);
+  useEffect(() => () => releaseAudioElement(audioRef), []);
 
-      if (histRes.data && histRes.data.messages) {
-        setMessages(histRes.data.messages);
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const pageIsVisible = document.visibilityState === "visible";
+      setIsPageVisible(pageIsVisible);
+      if (!pageIsVisible) {
+        // Ambient audio has its own visibility gate. Stop response playback as
+        // well so Jarvis never continues speaking in a background tab.
+        releaseAudioElement(audioRef);
+        setIsPlaying(false);
       }
-      if (memRes.data && memRes.data.memories) {
-        setMemories(memRes.data.memories);
-      }
-      if (statusRes.data && statusRes.data.llm_engine) {
-        setStatusInfo({
-          llm_engine: statusRes.data.llm_engine,
-          tts_engine: statusRes.data.tts_engine,
-        });
-      }
-    } catch (err) {
-      console.error("Failed to load initial assistant data", err);
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    setIsAmbientIdle(false);
+
+    if (
+      !initialDataLoaded ||
+      !isPageVisible ||
+      isOrbHidden ||
+      isJarvisBusy
+    ) {
+      return undefined;
     }
-  };
+
+    const idleDelay = conversationStarted
+      ? JARVIS_IDLE_DELAY_MS
+      : INITIAL_IDLE_DELAY_MS;
+    const idleTimer = window.setTimeout(() => {
+      setIsAmbientIdle(true);
+    }, idleDelay);
+
+    return () => window.clearTimeout(idleTimer);
+  }, [
+    conversationStarted,
+    idleCycle,
+    initialDataLoaded,
+    isJarvisBusy,
+    isOrbHidden,
+    isPageVisible,
+  ]);
+
+  useEffect(() => {
+    if (messages.length === 0) {
+      setChatScrollable(false);
+    }
+  }, [messages.length]);
+
+  useEffect(() => {
+    if (!isListening || isOrbHidden) {
+      setVoiceLevel(0);
+    }
+  }, [isOrbHidden, isListening]);
 
   const playAudio = async (url) => {
     if (!url) return;
+    let audio = null;
     try {
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
+      releaseAudioElement(audioRef);
       const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
-      const audio = new Audio(fullUrl);
+      audio = new Audio(fullUrl);
       audioRef.current = audio;
 
-      audio.onplay = () => setIsPlaying(true);
-      audio.onended = () => setIsPlaying(false);
-      audio.onerror = () => setIsPlaying(false);
+      const finishPlayback = () => {
+        if (audioRef.current === audio) {
+          setIsPlaying(false);
+          audio.onplay = null;
+          audio.onended = null;
+          audio.onerror = null;
+          audio.removeAttribute("src");
+          audio.load();
+          audioRef.current = null;
+        }
+      };
 
+      audio.onplay = () => setIsPlaying(true);
+      audio.onended = finishPlayback;
+      audio.onerror = finishPlayback;
+
+      setIsPlaying(true);
       await audio.play();
     } catch (err) {
+      if (audioRef.current === audio) {
+        releaseAudioElement(audioRef);
+        setIsPlaying(false);
+      } else if (!audioRef.current) {
+        setIsPlaying(false);
+      }
       console.error("Audio playback error:", err);
-      setIsPlaying(false);
     }
   };
 
   const sendMessage = async (textToSend) => {
     const userMessage = (textToSend || message).trim();
-    if (!userMessage) return;
+    if (
+      !userMessage ||
+      conversationClearInFlightRef.current ||
+      fullResetInFlightRef.current
+    ) {
+      return;
+    }
+
+    clearedSectionsRef.current = { conversation: false, memory: false };
+    setConversationStarted(true);
+    setIsAmbientIdle(false);
 
     setMessages((prev) => [
       ...prev,
       {
+        id: createMessageId(),
         sender: "You",
         text: userMessage,
         type: "text",
@@ -91,29 +302,49 @@ function App() {
     await sendToApi(userMessage);
   };
 
-  const sendVoiceMessage = async (transcript, voiceBlobUrl, duration) => {
-    if (!transcript) return;
+  const sendVoiceMessage = async (transcript, voiceBlob, duration) => {
+    const voiceTranscript = transcript?.trim();
+    if (
+      !voiceTranscript ||
+      conversationClearInFlightRef.current ||
+      fullResetInFlightRef.current
+    ) {
+      return;
+    }
+
+    clearedSectionsRef.current = { conversation: false, memory: false };
+    setConversationStarted(true);
+    setIsAmbientIdle(false);
 
     // Show as voice note bubble (no text shown to user)
     setMessages((prev) => [
       ...prev,
       {
+        id: createMessageId(),
         sender: "You",
-        text: transcript,  // hidden, only sent to AI
+        text: voiceTranscript,  // hidden, only sent to AI
         type: "audio",
-        voiceAudioUrl: voiceBlobUrl,
+        voiceAudioBlob: voiceBlob,
         voiceDuration: duration,
       },
     ]);
 
-    await sendToApi(transcript);
+    await sendToApi(voiceTranscript);
   };
 
   const sendToApi = async (userMessage) => {
+    const requestEpoch = sessionEpochRef.current;
+    const request = axios.post(
+      `${API_BASE}/chat`,
+      { message: userMessage },
+      { timeout: CHAT_REQUEST_TIMEOUT_MS },
+    );
+    activeChatRequestsRef.current.add(request);
+    setPendingRequests((count) => count + 1);
+
     try {
-      const response = await axios.post(`${API_BASE}/chat`, {
-        message: userMessage,
-      });
+      const response = await request;
+      if (requestEpoch !== sessionEpochRef.current) return;
 
       const replyText = response.data.reply;
       const audioUrl = response.data.audio_url;
@@ -122,6 +353,7 @@ function App() {
       setMessages((prev) => [
         ...prev,
         {
+          id: createMessageId(),
           sender: "AI",
           text: replyText,
           audioUrl: audioUrl,
@@ -134,47 +366,150 @@ function App() {
       }
 
       if (audioUrl) {
-        playAudio(audioUrl);
+        void playAudio(audioUrl);
       }
     } catch (error) {
+      if (requestEpoch !== sessionEpochRef.current) return;
       console.error("API error:", error);
-      const detail = error.response?.data?.detail || "Unable to contact the assistant server.";
       setMessages((prev) => [
         ...prev,
         {
+          id: createMessageId(),
           sender: "System",
-          text: `Error: ${detail}`,
+          text: "The assistant is temporarily unavailable. Please try again.",
           type: "text",
         },
       ]);
+    } finally {
+      activeChatRequestsRef.current.delete(request);
+      setPendingRequests((count) => Math.max(0, count - 1));
+    }
+  };
+
+  const performFullReset = async () => {
+    if (fullResetInFlightRef.current) return;
+
+    fullResetInFlightRef.current = true;
+    sessionEpochRef.current += 1;
+    setIsFullResetting(true);
+    setIsAmbientIdle(false);
+    setInitialDataLoaded(false);
+    setMessage("");
+    setMessages([]);
+    setMemories({});
+    setSidebarOpen(false);
+    setConversationStarted(false);
+    setChatScrollable(false);
+    setIsRecordingIntent(false);
+    setIsClearingConversation(false);
+    conversationClearInFlightRef.current = false;
+    setIsListening(false);
+    setVoiceLevel(0);
+    setResetEpoch((epoch) => epoch + 1);
+    releaseAudioElement(audioRef);
+    setIsPlaying(false);
+
+    let serverResetSucceeded = false;
+    try {
+      // Let already accepted chat work finish, then clear once more so a late
+      // response cannot repopulate server-side history after the reset.
+      const activeRequests = Array.from(activeChatRequestsRef.current);
+      await Promise.allSettled(activeRequests);
+      await postClearRequest("/clear");
+      serverResetSucceeded = true;
+    } catch (err) {
+      console.error("Failed to finalize the full Jarvis reset", err);
+    } finally {
+      // The individual clear operations already succeeded before this
+      // coordinator runs. Retaining these flags after a failed final session
+      // clear means the next clear action retries the server-side eviction.
+      clearedSectionsRef.current = serverResetSucceeded
+        ? { conversation: false, memory: false }
+        : { conversation: true, memory: true };
+      setPendingRequests(0);
+      setInitialDataLoaded(true);
+      setIsFullResetting(false);
+      setIdleCycle((cycle) => cycle + 1);
+      fullResetInFlightRef.current = false;
+    }
+  };
+
+  const noteClearedSection = async (section) => {
+    const clearedSections = {
+      ...clearedSectionsRef.current,
+      [section]: true,
+    };
+    clearedSectionsRef.current = clearedSections;
+
+    if (clearedSections.conversation && clearedSections.memory) {
+      await performFullReset();
     }
   };
 
   // Task 1: Clear only conversation history (preserves long-term memories)
   const handleClearChat = async () => {
+    if (
+      isResetControlDisabled ||
+      conversationClearInFlightRef.current ||
+      fullResetInFlightRef.current
+    ) {
+      return;
+    }
     if (!window.confirm("Clear conversation history? Your saved long-term memories will be preserved.")) {
       return;
     }
+
+    conversationClearInFlightRef.current = true;
+    sessionEpochRef.current += 1;
+    setIsClearingConversation(true);
+    setMessages([]);
+    setConversationStarted(false);
+    setChatScrollable(false);
+    setIsAmbientIdle(false);
+    releaseAudioElement(audioRef);
+    setIsPlaying(false);
+
+    let didClearConversation = false;
     try {
-      await axios.post(`${API_BASE}/clear-chat`);
-      setMessages([]);
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
-      setIsPlaying(false);
+      // Each chat request has a finite client timeout. Waiting for those
+      // promises before issuing the clear prevents a completed request from
+      // restoring the just-cleared server history.
+      const activeRequests = Array.from(activeChatRequestsRef.current);
+      await Promise.allSettled(activeRequests);
+      await postClearRequest("/clear-chat");
+      didClearConversation = true;
     } catch (err) {
       console.error("Failed to clear chat history", err);
+    } finally {
+      conversationClearInFlightRef.current = false;
+      setIsClearingConversation(false);
+      // A clear invalidates an in-flight history request, so its local empty
+      // state becomes the new baseline for the idle controller.
+      setInitialDataLoaded(true);
+    }
+
+    if (didClearConversation) {
+      setIdleCycle((cycle) => cycle + 1);
+      await noteClearedSection("conversation");
     }
   };
 
   // Task 1: Reset only long-term memories (preserves active chat messages)
   const handleClearMemories = async () => {
+    if (
+      isResetControlDisabled ||
+      conversationClearInFlightRef.current ||
+      fullResetInFlightRef.current
+    ) {
+      return;
+    }
     if (!window.confirm("Are you sure you want to delete all long-term memories? Your chat history will be preserved.")) {
       return;
     }
     try {
-      await axios.post(`${API_BASE}/clear-memories`);
+      await postClearRequest("/clear-memories");
       setMemories({});
+      await noteClearedSection("memory");
     } catch (err) {
       console.error("Failed to reset memories", err);
     }
@@ -182,64 +517,83 @@ function App() {
 
   return (
     <div className="app-layout">
-      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-        <header className="app-header">
-          <div className="brand-section">
-            <div className="brand-logo">🎙️</div>
-            <div className="brand-info">
-              <h1>Enterprise Voice Assistant</h1>
-              <div className="brand-subtitle">
-                <span>{statusInfo.llm_engine}</span>
-                <span className="engine-tag">Active</span>
-              </div>
-            </div>
+      <div className="workspace-shell">
+        <header className="workspace-header">
+          <div className="workspace-title">
+            <strong>JARVIS</strong>
+            <span>Enterprise Voice Assistant</span>
           </div>
-
-          <div className="header-actions">
+          <div className="workspace-actions">
             <button
-              className="header-btn clear-chat-btn"
+              type="button"
+              className="workspace-control clear-chat-trigger"
               onClick={handleClearChat}
-              title="Clear conversation history without deleting saved memories"
+              disabled={isResetControlDisabled}
+              aria-label="Clear conversation"
+              title="Clear conversation"
             >
-              🗑️ Clear Chat
+              <Icon name="trash" />
+              <span>Clear conversation</span>
             </button>
             <button
-              className="header-btn memory-toggle-btn"
+              type="button"
+              className="workspace-control memory-trigger"
               onClick={() => setSidebarOpen(!sidebarOpen)}
+              disabled={isResetControlDisabled}
+              aria-expanded={sidebarOpen}
+              aria-label="Open memory"
+              title="Open memory"
             >
-              🧠 Memories ({Object.keys(memories).length})
+              <Icon name="memory" />
+              <span>Memory</span>
+              <b>{Object.keys(memories).length}</b>
             </button>
           </div>
         </header>
 
-        <main className="main-content">
-          <AudioVisualizer isPlaying={isPlaying} isListening={isListening} />
+        <main className={`main-content${messages.length ? " has-messages" : ""}${isOrbHidden ? " orb-hidden" : ""}`}>
+          <AudioVisualizer
+            isPlaying={isPlaying}
+            isListening={isListening}
+            isThinking={!isFullResetting && pendingRequests > 0}
+            isVisible={!isOrbHidden}
+            isAmbientIdle={ambientEnabled}
+            voiceLevel={isOrbHidden ? 0 : voiceLevel}
+          />
 
           <ChatWindow
             messages={messages}
             playAudio={playAudio}
-            onSelectSuggestion={(prompt) => {
-              setMessage(prompt);
-              sendMessage(prompt);
-            }}
+            userName={userName}
+            isOrbCollapsed={isOrbHidden}
+            onScrollableChange={setChatScrollable}
           />
 
           <ChatInput
+            key={`chat-input-${resetEpoch}`}
             message={message}
             setMessage={setMessage}
             sendMessage={() => sendMessage()}
             sendVoiceMessage={sendVoiceMessage}
             isListening={isListening}
             setIsListening={setIsListening}
+            isDisabled={
+              isFullResetting || (isClearingConversation && !isListening)
+            }
+            isVoiceReactiveEnabled={!isOrbHidden}
+            onRecordingIntentChange={setIsRecordingIntent}
+            onVoiceLevelChange={setVoiceLevel}
           />
         </main>
       </div>
 
       <MemorySidebar
+        key={`memory-sidebar-${resetEpoch}`}
         memories={memories}
         isOpen={sidebarOpen}
         toggleSidebar={() => setSidebarOpen(false)}
         onClearMemories={handleClearMemories}
+        isClearDisabled={isResetControlDisabled}
       />
     </div>
   );

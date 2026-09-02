@@ -1,20 +1,65 @@
-import { useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Icon from "./Icon";
 
-function MessageBubble({ sender, text, audioUrl, playAudio, type, voiceAudioUrl, voiceDuration }) {
+function MessageBubble({
+  sender,
+  text,
+  audioUrl,
+  playAudio,
+  type,
+  voiceAudioBlob,
+  voiceDuration,
+  userInitial = "U",
+}) {
   const isUser = sender === "You";
   const isSystem = sender === "System";
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("idle");
   const [vnPlaying, setVnPlaying] = useState(false);
   const [vnProgress, setVnProgress] = useState(0);
   const vnAudioRef = useRef(null);
-  const vnIntervalRef = useRef(null);
+  const vnObjectUrlRef = useRef(null);
+  const copyTimerRef = useRef(null);
 
   const isVoiceNote = type === "audio" && isUser;
+  const displaySender = !isUser && !isSystem ? "JARVIS" : sender;
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const disposeVoiceAudio = useCallback(() => {
+    const audio = vnAudioRef.current;
+    if (audio) {
+      audio.onplay = null;
+      audio.onpause = null;
+      audio.ontimeupdate = null;
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      vnAudioRef.current = null;
+    }
+    if (vnObjectUrlRef.current) {
+      URL.revokeObjectURL(vnObjectUrlRef.current);
+      vnObjectUrlRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => {
+    clearTimeout(copyTimerRef.current);
+    disposeVoiceAudio();
+  }, [disposeVoiceAudio]);
+
+  const handleCopy = async () => {
+    clearTimeout(copyTimerRef.current);
+    try {
+      if (!navigator.clipboard) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(text);
+      setCopyStatus("copied");
+    } catch (error) {
+      console.error("Clipboard copy failed:", error);
+      setCopyStatus("error");
+    }
+    copyTimerRef.current = setTimeout(() => setCopyStatus("idle"), 2000);
   };
 
   const formatDuration = (seconds) => {
@@ -25,22 +70,26 @@ function MessageBubble({ sender, text, audioUrl, playAudio, type, voiceAudioUrl,
   };
 
   const toggleVoiceNote = () => {
-    if (!voiceAudioUrl) return;
+    if (!voiceAudioBlob) return;
 
     if (vnPlaying) {
-      if (vnAudioRef.current) {
-        vnAudioRef.current.pause();
-      }
-      clearInterval(vnIntervalRef.current);
-      setVnPlaying(false);
+      vnAudioRef.current?.pause();
       return;
     }
 
-    const audio = new Audio(voiceAudioUrl);
+    if (vnAudioRef.current) {
+      vnAudioRef.current.play().catch(() => setVnPlaying(false));
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(voiceAudioBlob);
+    const audio = new Audio(objectUrl);
+    vnObjectUrlRef.current = objectUrl;
     vnAudioRef.current = audio;
     setVnProgress(0);
 
     audio.onplay = () => setVnPlaying(true);
+    audio.onpause = () => setVnPlaying(false);
     audio.ontimeupdate = () => {
       if (audio.duration) {
         setVnProgress((audio.currentTime / audio.duration) * 100);
@@ -49,52 +98,59 @@ function MessageBubble({ sender, text, audioUrl, playAudio, type, voiceAudioUrl,
     audio.onended = () => {
       setVnPlaying(false);
       setVnProgress(0);
-      clearInterval(vnIntervalRef.current);
+      disposeVoiceAudio();
     };
     audio.onerror = () => {
       setVnPlaying(false);
       setVnProgress(0);
+      disposeVoiceAudio();
     };
 
-    audio.play().catch(() => setVnPlaying(false));
+    audio.play().catch(() => {
+      setVnPlaying(false);
+      disposeVoiceAudio();
+    });
   };
 
   return (
-    <div className={`message-row ${isUser ? "user-row" : "ai-row"}`}>
+    <div className={`message-row ${isUser ? "user-row" : "ai-row"}${isSystem ? " system-row" : ""}`}>
       {!isUser && (
-        <div className="avatar ai-avatar">
-          🤖
+        <div className={`avatar ${isSystem ? "system-avatar" : "ai-avatar"}`} aria-hidden="true">
+          {isSystem ? (
+            <Icon name="alert" size={18} />
+          ) : (
+            <span className="jarvis-message-orb" />
+          )}
         </div>
       )}
 
       {isVoiceNote ? (
-        /* WhatsApp-style Voice Note Bubble */
         <div className="message-bubble user-message voice-note-bubble">
           <div className="voice-note-content">
             <button
+              type="button"
               className="vn-play-btn"
               onClick={toggleVoiceNote}
               title={vnPlaying ? "Pause" : "Play"}
+              aria-label={vnPlaying ? "Pause voice note" : "Play voice note"}
+              aria-pressed={vnPlaying}
             >
-              {vnPlaying ? (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                  <rect x="6" y="4" width="4" height="16" rx="1" />
-                  <rect x="14" y="4" width="4" height="16" rx="1" />
-                </svg>
-              ) : (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                  <polygon points="6 3 20 12 6 21 6 3" />
-                </svg>
-              )}
+              <Icon name={vnPlaying ? "pause" : "play"} size={20} />
             </button>
 
             <div className="vn-waveform">
-              <div className="vn-waveform-track">
+              <div
+                className="vn-waveform-track"
+                role="progressbar"
+                aria-label="Voice note playback progress"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow={Math.round(vnProgress)}
+              >
                 <div
                   className="vn-waveform-progress"
                   style={{ width: `${vnProgress}%` }}
                 ></div>
-                {/* Static waveform bars */}
                 <div className="vn-bars">
                   {Array.from({ length: 28 }).map((_, i) => (
                     <span
@@ -112,30 +168,38 @@ function MessageBubble({ sender, text, audioUrl, playAudio, type, voiceAudioUrl,
               </span>
             </div>
 
-            <span className="vn-mic-icon">🎤</span>
+            <span className="vn-mic-icon" aria-hidden="true">
+              <Icon name="mic" size={17} />
+            </span>
           </div>
         </div>
       ) : (
-        /* Standard Text Message Bubble */
         <div className={`message-bubble ${isUser ? "user-message" : isSystem ? "system-message" : "ai-message"}`}>
           <div className="message-header">
-            <span className="sender-name">{sender}</span>
+            <span className="sender-name">{displaySender}</span>
             <div className="message-actions">
               {!isUser && audioUrl && (
                 <button
+                  type="button"
                   className="action-icon-btn"
                   onClick={() => playAudio(audioUrl)}
-                  title="Replay Voice"
+                  title="Replay voice"
+                  aria-label="Replay voice response"
                 >
-                  🔊
+                  <Icon name="volume" size={16} />
                 </button>
               )}
               <button
+                type="button"
                 className="action-icon-btn"
                 onClick={handleCopy}
-                title="Copy text"
+                title={copyStatus === "copied" ? "Copied" : copyStatus === "error" ? "Copy failed" : "Copy text"}
+                aria-label={copyStatus === "copied" ? "Text copied" : copyStatus === "error" ? "Could not copy text" : "Copy text"}
               >
-                {copied ? "✓" : "📋"}
+                <Icon
+                  name={copyStatus === "copied" ? "check" : copyStatus === "error" ? "alert" : "copy"}
+                  size={16}
+                />
               </button>
             </div>
           </div>
@@ -145,8 +209,8 @@ function MessageBubble({ sender, text, audioUrl, playAudio, type, voiceAudioUrl,
       )}
 
       {isUser && (
-        <div className="avatar user-avatar">
-          👤
+        <div className="avatar user-avatar" aria-hidden="true">
+          <span>{userInitial}</span>
         </div>
       )}
     </div>
@@ -154,4 +218,3 @@ function MessageBubble({ sender, text, audioUrl, playAudio, type, voiceAudioUrl,
 }
 
 export default MessageBubble;
-

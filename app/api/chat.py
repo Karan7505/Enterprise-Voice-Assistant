@@ -1,4 +1,6 @@
+import logging
 from pathlib import Path
+import re
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -9,7 +11,6 @@ from app.services.session_service import (
     clear_session,
     clear_chat_history,
     clear_memory_data,
-    get_session,
 )
 from app.services.memory_service import get_all_memories
 from app.services.database_chat_history import get_messages
@@ -18,8 +19,10 @@ from app.services.tts_service import generate_speech
 from app.core.config import active_llm, active_tts
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 AUDIO_DIR = Path("audio")
+AUDIO_FILENAME_PATTERN = re.compile(r"^[0-9a-f]{32}\.mp3$")
 DEFAULT_SESSION_ID = "default"
 
 
@@ -42,17 +45,18 @@ def chat(request: ChatRequest):
             request.message,
             session_id,
         )
-    except LLMError as e:
+    except LLMError:
+        logger.warning("Chat request could not produce a valid LLM response")
         raise HTTPException(
             status_code=503,
-            detail=str(e),
-        )
+            detail="The assistant is temporarily unavailable. Please try again.",
+        ) from None
 
     try:
         filename = generate_speech(reply)
         audio_url = f"/audio/{filename}"
-    except Exception as e:
-        print(f"TTS generation error: {e}")
+    except Exception:
+        logger.exception("TTS generation failed; returning the text response without audio")
         audio_url = ""
 
     memories = get_all_memories(session_id)
@@ -115,9 +119,15 @@ def status():
 
 @router.get("/audio/{filename}")
 def get_audio(filename: str):
+    if not AUDIO_FILENAME_PATTERN.fullmatch(filename):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid audio filename",
+        )
+
     file_path = AUDIO_DIR / filename
 
-    if not file_path.exists():
+    if not file_path.is_file():
         raise HTTPException(
             status_code=404,
             detail="Audio file not found",

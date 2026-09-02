@@ -1,14 +1,19 @@
+import json
+import logging
+
 from app.core.config import settings
 from app.prompts.chat_prompt import build_prompt
 from app.services.context_builder import build_context
 from app.services.database_chat_history import add_message, get_messages, clear_messages
-from app.services.llm_service import generate
+from app.services.llm_service import LLMError, generate
 from app.services.memory_service import (
     extract_json,
     save_memories,
     delete_memories,
     clear_memories,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SESSION_ID = "default"
 
@@ -95,14 +100,31 @@ def process_message(
 
     raw_response = generate(prompt)
 
-    data = extract_json(raw_response)
+    try:
+        data = extract_json(raw_response)
+        reply = data.get("reply")
+        new_memories = data.get("memories", {})
+        delete_keys = data.get("delete_memories", [])
 
-    reply = data.get("reply", "")
-    new_memories = data.get("memories", {})
-    delete_keys = data.get("delete_memories", [])
+        if not isinstance(reply, str) or not reply.strip():
+            raise ValueError("LLM response is missing a non-empty reply")
+        if not isinstance(new_memories, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in new_memories.items()
+        ):
+            raise ValueError("LLM response memories must contain string keys and values")
+        if not isinstance(delete_keys, list) or not all(
+            isinstance(key, str) for key in delete_keys
+        ):
+            raise ValueError("LLM response delete_memories must be a string list")
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        logger.exception("LLM returned a malformed structured response")
+        raise LLMError("The LLM returned an invalid response") from exc
+
+    reply = reply.strip()
 
     # Process explicit deletions if requested by user
-    if delete_keys and isinstance(delete_keys, list):
+    if delete_keys:
         delete_memories(delete_keys, session.session_id)
         for k in delete_keys:
             session.crm_context.pop(k, None)
@@ -168,4 +190,4 @@ def clear_session(
         None,
     )
     clear_memories(session_id)
-    clear_messages(session_id)
+    clear_messages(session_id)
