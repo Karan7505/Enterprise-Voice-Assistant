@@ -26,7 +26,9 @@ class ChatResponseModeTests(unittest.TestCase):
                 "memories": {"name": "Karan"},
             },
         )
-        process_message.assert_called_once_with("Hello", "default")
+        process_message.assert_called_once_with(
+            "Hello", "default", mode="text"
+        )
         generate_speech.assert_not_called()
         get_all_memories.assert_called_once_with("default")
 
@@ -51,7 +53,9 @@ class ChatResponseModeTests(unittest.TestCase):
                 "memories": {"name": "Karan"},
             },
         )
-        process_message.assert_called_once_with("Hello", "default")
+        process_message.assert_called_once_with(
+            "Hello", "default", mode="voice"
+        )
         generate_speech.assert_called_once_with("Hello, Karan.")
         get_all_memories.assert_called_once_with("default")
 

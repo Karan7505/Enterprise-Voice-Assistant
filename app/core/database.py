@@ -55,5 +55,13 @@ def initialize_database():
             """
         )
 
+    if "mode" not in columns:
+        conn.execute(
+            """
+            ALTER TABLE messages
+            ADD COLUMN mode TEXT DEFAULT 'text'
+            """
+        )
+
     conn.commit()
     conn.close()

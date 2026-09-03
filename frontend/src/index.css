@@ -14,13 +14,23 @@
   --ink-soft: #70655d;
   --ink-faint: #9a8e84;
   --line: rgba(70, 49, 34, 0.1);
-  --orange: #f35d27;
-  --orange-strong: #df4612;
-  --peach-soft: #ffe4d3;
-  --danger: #ac4d3e;
+  /* Solar Lava accent system, derived from the JARVIS orb palette:
+     #FF8B2B main · #FFA73B highlight · #FF6A1C hot orange ·
+     #FC1304 bright red · #D90206 deep red edge. */
+  --solar-main: #FF8B2B;
+  --solar-highlight: #FFA73B;
+  --solar-hot: #FF6A1C;
+  --solar-red: #FC1304;
+  --solar-edge: #D90206;
+
+  --orange: #ff6a1c;
+  --orange-strong: #e8561a;
+  --orange-glow: #ffa73b;
+  --peach-soft: #ffe3cc;
+  --danger: #d90206;
   --shadow-float: 0 18px 52px rgba(76, 52, 34, 0.11);
 
-  --shadow-accent: 0 8px 22px rgba(243, 93, 39, 0.2);
+  --shadow-accent: 0 8px 22px rgba(255, 106, 28, 0.25);
 }
 
 * {

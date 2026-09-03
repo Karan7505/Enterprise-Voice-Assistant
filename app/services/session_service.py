@@ -12,6 +12,7 @@ from app.services.memory_service import (
     delete_memories,
     clear_memories,
 )
+from app.connectors.orchestrator import run_business_action
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ def update_memories(
 def process_message(
     message: str,
     session_id: str = DEFAULT_SESSION_ID,
+    mode: str = "text",
 ):
     session = get_session(
         user_message=message,
@@ -105,6 +107,7 @@ def process_message(
         reply = data.get("reply")
         new_memories = data.get("memories", {})
         delete_keys = data.get("delete_memories", [])
+        action_data = data.get("action")
 
         if not isinstance(reply, str) or not reply.strip():
             raise ValueError("LLM response is missing a non-empty reply")
@@ -117,11 +120,19 @@ def process_message(
             isinstance(key, str) for key in delete_keys
         ):
             raise ValueError("LLM response delete_memories must be a string list")
+        # action is optional; when present it must be an object or null.
+        if action_data is not None and not isinstance(action_data, dict):
+            raise ValueError("LLM response action must be an object or null")
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         logger.exception("LLM returned a malformed structured response")
         raise LLMError("The LLM returned an invalid response") from exc
 
     reply = reply.strip()
+
+    # Business actions (WhatsApp / email) are executed here through the
+    # connector layer. This is the single bridge between the chat flow and any
+    # external provider, so no provider code lives in the LLM/prompt path.
+    reply = run_business_action(reply, action_data)
 
     # Process explicit deletions if requested by user
     if delete_keys:
@@ -147,6 +158,7 @@ def process_message(
         "user",
         message,
         session.session_id,
+        mode="voice" if mode == "voice" else "text",
     )
 
     add_message(

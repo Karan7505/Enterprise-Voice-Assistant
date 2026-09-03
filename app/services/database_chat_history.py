@@ -4,15 +4,20 @@ from app.models.chat_message import ChatMessage
 DEFAULT_SESSION_ID = "default"
 
 
-def add_message(role: str, content: str, session_id: str = DEFAULT_SESSION_ID):
+def add_message(
+    role: str,
+    content: str,
+    session_id: str = DEFAULT_SESSION_ID,
+    mode: str = "text",
+):
     conn = get_connection()
 
     conn.execute(
         """
-        INSERT INTO messages (session_id, role, content)
-        VALUES (?, ?, ?)
+        INSERT INTO messages (session_id, role, content, mode)
+        VALUES (?, ?, ?, ?)
         """,
-        (session_id, role, content),
+        (session_id, role, content, mode),
     )
 
     conn.commit()
@@ -24,7 +29,7 @@ def get_messages(session_id: str = DEFAULT_SESSION_ID) -> list[ChatMessage]:
 
     rows = conn.execute(
         """
-        SELECT role, content
+        SELECT role, content, mode
         FROM messages
         WHERE session_id = ?
         ORDER BY id
@@ -38,6 +43,7 @@ def get_messages(session_id: str = DEFAULT_SESSION_ID) -> list[ChatMessage]:
         ChatMessage(
             role=row["role"],
             content=row["content"],
+            mode=row["mode"] if row["mode"] is not None else "text",
         )
         for row in rows
     ]

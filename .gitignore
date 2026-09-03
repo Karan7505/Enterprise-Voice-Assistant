@@ -28,6 +28,8 @@ audio/
 # --- Frontend: Node and build output ---
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
+.vite/
 frontend/.env
 frontend/.env.local
 frontend/.env.development

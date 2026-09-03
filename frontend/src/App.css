@@ -150,7 +150,7 @@
     saturate(var(--voice-reactive-saturation))
     drop-shadow(
       0 0 var(--voice-reactive-halo-blur)
-      rgba(243, 93, 39, var(--voice-reactive-halo-opacity))
+      rgba(255, 106, 28, var(--voice-reactive-halo-opacity))
     );
   transition: transform 55ms linear, filter 70ms ease-out;
   will-change: transform, filter;
@@ -278,7 +278,7 @@
 .orb-ring {
   width: var(--orb-ring-size);
   height: var(--orb-ring-size);
-  border: 1px solid rgba(243, 93, 39, 0.075);
+  border: 1px solid rgba(255, 106, 28, 0.075);
   opacity: 0.72;
   transform: translate(-50%, -50%);
   will-change: opacity, transform;
@@ -427,7 +427,7 @@
 }
 
 .user-avatar {
-  border: 1px solid rgba(243, 93, 39, 0.3);
+  border: 1px solid rgba(255, 106, 28, 0.3);
   color: var(--ink);
   background: var(--surface-solid);
   box-shadow: 0 5px 14px rgba(76, 52, 34, 0.07);
@@ -442,17 +442,18 @@
   height: 23px;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 40% 37%, rgba(255, 194, 149, 0.72) 0%, transparent 33%),
+    radial-gradient(circle at 40% 34%, #ffa73b 0%, rgba(255, 167, 59, 0.6) 18%, transparent 40%),
+    radial-gradient(circle at 68% 72%, rgba(217, 2, 6, 0.6) 0%, transparent 42%),
     radial-gradient(
       circle at 51% 53%,
-      #ed4a12 0%,
-      #f4662c 38%,
-      rgba(255, 143, 87, 0.74) 65%,
-      rgba(255, 201, 164, 0.18) 86%,
+      #ff8b2b 0%,
+      #ff6a1c 42%,
+      #fc1304 68%,
+      rgba(217, 2, 6, 0.15) 88%,
       transparent 100%
     );
   box-shadow:
-    0 0 8px rgba(243, 93, 39, 0.32),
+    0 0 8px rgba(255, 106, 28, 0.32),
     0 0 17px rgba(255, 145, 84, 0.18);
   filter: blur(0.2px) saturate(1.03);
   animation: message-orb-breathe 6s ease-in-out infinite;
@@ -649,8 +650,8 @@
 }
 
 .input-area:focus-within {
-  border-color: rgba(243, 93, 39, 0.38);
-  box-shadow: 0 18px 54px rgba(76, 52, 34, 0.12), 0 0 0 4px rgba(243, 93, 39, 0.06);
+  border-color: rgba(255, 106, 28, 0.38);
+  box-shadow: 0 18px 54px rgba(76, 52, 34, 0.12), 0 0 0 4px rgba(255, 106, 28, 0.06);
 }
 
 .input-area textarea {
@@ -699,7 +700,7 @@
   border-color: transparent;
   color: #fffaf3;
   background: var(--orange);
-  box-shadow: 0 0 0 6px rgba(243, 93, 39, 0.1);
+  box-shadow: 0 0 0 6px rgba(255, 106, 28, 0.1);
   animation: mic-listen 1.15s ease-in-out infinite;
 }
 
@@ -734,7 +735,7 @@
   width: fit-content;
   margin: 0 auto 9px;
   padding: 0 14px;
-  border: 1px solid rgba(243, 93, 39, 0.18);
+  border: 1px solid rgba(255, 106, 28, 0.18);
   border-radius: 999px;
   color: var(--orange-strong);
   background: var(--peach-soft);
@@ -994,13 +995,13 @@
   .copy-btn:hover,
   .action-icon-btn:hover {
     color: var(--orange-strong);
-    background: rgba(243, 93, 39, 0.08);
+    background: rgba(255, 106, 28, 0.08);
     opacity: 1;
   }
 
   .workspace-control:hover {
     color: var(--orange-strong);
-    border-color: rgba(243, 93, 39, 0.25);
+    border-color: rgba(255, 106, 28, 0.25);
     background: #fffaf3;
     box-shadow: 0 10px 28px rgba(76, 52, 34, 0.08);
     transform: translateY(-1px);
@@ -1020,44 +1021,44 @@
 
 @keyframes orb-breathe {
   0%, 100% {
-    box-shadow: 0 0 32px rgba(243, 93, 39, 0.3), 0 0 78px rgba(243, 93, 39, 0.21), 0 0 136px rgba(255, 157, 99, 0.11);
+    box-shadow: 0 0 32px rgba(255, 106, 28, 0.3), 0 0 78px rgba(255, 106, 28, 0.21), 0 0 136px rgba(255, 157, 99, 0.11);
     transform: translate(-50%, -50%) scale(0.99);
   }
   50% {
-    box-shadow: 0 0 40px rgba(243, 93, 39, 0.36), 0 0 92px rgba(243, 93, 39, 0.26), 0 0 152px rgba(255, 157, 99, 0.15);
+    box-shadow: 0 0 40px rgba(255, 106, 28, 0.36), 0 0 92px rgba(255, 106, 28, 0.26), 0 0 152px rgba(255, 157, 99, 0.15);
     transform: translate(-50%, -50%) scale(1.018);
   }
 }
 
 @keyframes message-orb-breathe {
   0%, 100% {
-    box-shadow: 0 0 7px rgba(243, 93, 39, 0.28), 0 0 15px rgba(255, 145, 84, 0.15);
+    box-shadow: 0 0 7px rgba(255, 106, 28, 0.28), 0 0 15px rgba(255, 145, 84, 0.15);
     transform: scale(0.98);
   }
   50% {
-    box-shadow: 0 0 10px rgba(243, 93, 39, 0.36), 0 0 20px rgba(255, 145, 84, 0.21);
+    box-shadow: 0 0 10px rgba(255, 106, 28, 0.36), 0 0 20px rgba(255, 145, 84, 0.21);
     transform: scale(1.035);
   }
 }
 
 @keyframes orb-compact-breathe {
   0%, 100% {
-    box-shadow: 0 0 8px rgba(243, 93, 39, 0.28), 0 0 16px rgba(255, 145, 84, 0.15);
+    box-shadow: 0 0 8px rgba(255, 106, 28, 0.28), 0 0 16px rgba(255, 145, 84, 0.15);
     transform: translate(-50%, -50%) scale(1);
   }
   50% {
-    box-shadow: 0 0 12px rgba(243, 93, 39, 0.36), 0 0 24px rgba(255, 145, 84, 0.22);
+    box-shadow: 0 0 12px rgba(255, 106, 28, 0.36), 0 0 24px rgba(255, 145, 84, 0.22);
     transform: translate(-50%, -50%) scale(1.05);
   }
 }
 
 @keyframes orb-listen {
   0%, 100% {
-    box-shadow: 0 0 38px rgba(243, 93, 39, 0.36), 0 0 88px rgba(243, 93, 39, 0.25), 0 0 148px rgba(255, 157, 99, 0.14);
+    box-shadow: 0 0 38px rgba(255, 106, 28, 0.36), 0 0 88px rgba(255, 106, 28, 0.25), 0 0 148px rgba(255, 157, 99, 0.14);
     transform: translate(-50%, -50%) scale(1);
   }
   50% {
-    box-shadow: 0 0 52px rgba(243, 93, 39, 0.44), 0 0 112px rgba(243, 93, 39, 0.32), 0 0 176px rgba(255, 157, 99, 0.19);
+    box-shadow: 0 0 52px rgba(255, 106, 28, 0.44), 0 0 112px rgba(255, 106, 28, 0.32), 0 0 176px rgba(255, 157, 99, 0.19);
     transform: translate(-50%, -50%) scale(1.035);
   }
 }
@@ -1079,11 +1080,11 @@
 
 @keyframes orb-speak {
   0%, 100% {
-    box-shadow: 0 0 36px rgba(243, 93, 39, 0.34), 0 0 84px rgba(243, 93, 39, 0.24), 0 0 142px rgba(255, 157, 99, 0.13);
+    box-shadow: 0 0 36px rgba(255, 106, 28, 0.34), 0 0 84px rgba(255, 106, 28, 0.24), 0 0 142px rgba(255, 157, 99, 0.13);
     transform: translate(-50%, -50%) scale(0.995);
   }
   50% {
-    box-shadow: 0 0 48px rgba(243, 93, 39, 0.41), 0 0 104px rgba(243, 93, 39, 0.3), 0 0 166px rgba(255, 157, 99, 0.18);
+    box-shadow: 0 0 48px rgba(255, 106, 28, 0.41), 0 0 104px rgba(255, 106, 28, 0.3), 0 0 166px rgba(255, 157, 99, 0.18);
     transform: translate(-50%, -50%) scale(1.028);
   }
 }
@@ -1134,8 +1135,8 @@
 }
 
 @keyframes mic-listen {
-  0%, 100% { box-shadow: 0 0 0 4px rgba(243, 93, 39, 0.08); }
-  50% { box-shadow: 0 0 0 9px rgba(243, 93, 39, 0.13); }
+  0%, 100% { box-shadow: 0 0 0 4px rgba(255, 106, 28, 0.08); }
+  50% { box-shadow: 0 0 0 9px rgba(255, 106, 28, 0.13); }
 }
 
 @keyframes rec-blink {
@@ -1374,7 +1375,7 @@
 .main-content.has-messages .ai-orb {
   animation: orb-compact-breathe 6s ease-in-out infinite;
   box-shadow:
-    0 0 8px rgba(243, 93, 39, 0.28),
+    0 0 8px rgba(255, 106, 28, 0.28),
     0 0 16px rgba(255, 145, 84, 0.15);
   filter: blur(0.3px) saturate(1.03);
 }

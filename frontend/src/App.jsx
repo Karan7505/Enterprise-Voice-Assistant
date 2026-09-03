@@ -374,6 +374,13 @@ function App() {
           history.map((item) => ({
             ...item,
             id: item.id || createMessageId(),
+            // A reloaded voice request is stored with the transcript as its text.
+            // Re-tag it as an audio note so the transcript stays internal and
+            // only the voice-note bubble renders (no transcript shown).
+            type:
+              item.sender === "You" && item.mode === "voice"
+                ? "audio"
+                : item.type || "text",
           })),
         );
         setConversationStarted(

@@ -195,6 +195,24 @@ class Settings:
         minimum=0,
     )
 
+    # --- Connectors (modular business-system layer) ---
+    # CRM: a reference directory loaded from a JSON array in the environment.
+    # Swap for a live CRM provider by overriding get_crm(); no core changes.
+    CRM_PROVIDER: str = clean_str(os.getenv("CRM_PROVIDER"), "directory")
+    CRM_CONTACTS: str = clean_str(os.getenv("CRM_CONTACTS"))
+
+    # WhatsApp Business (Meta Cloud API). Never expose to the frontend.
+    WA_TOKEN: str = clean_str(os.getenv("WA_TOKEN"))
+    WA_PHONE_NUMBER_ID: str = clean_str(os.getenv("WA_PHONE_NUMBER_ID"))
+    WA_GRAPH_VERSION: str = clean_str(os.getenv("WA_GRAPH_VERSION"), "v19.0")
+
+    # Email (any SMTP provider: Gmail, Microsoft/Outlook, custom relay).
+    EMAIL_HOST: str = clean_str(os.getenv("EMAIL_HOST"))
+    EMAIL_PORT: int = clean_int(os.getenv("EMAIL_PORT"), default=587, minimum=1)
+    EMAIL_USERNAME: str = clean_str(os.getenv("EMAIL_USERNAME"))
+    EMAIL_PASSWORD: str = clean_str(os.getenv("EMAIL_PASSWORD"))
+    EMAIL_USE_TLS: bool = clean_bool(os.getenv("EMAIL_USE_TLS"), default=True)
+
 
 settings = Settings()
 
@@ -220,3 +238,16 @@ if settings.TTS_API_KEY and not settings.TTS_API_KEY.startswith("your_"):
 active_tts.append("gTTS (Free Fallback)")
 
 print(f"[TTS CONFIG] Active Audio Engine(s): {', '.join(active_tts)}")
+
+# Connector availability (credentials are never printed, only configured/not).
+active_connectors = []
+if settings.CRM_CONTACTS:
+    active_connectors.append("CRM (directory)")
+if settings.WA_TOKEN and settings.WA_PHONE_NUMBER_ID:
+    active_connectors.append("WhatsApp")
+if settings.EMAIL_HOST and settings.EMAIL_USERNAME:
+    active_connectors.append("Email (SMTP)")
+if active_connectors:
+    print(f"[CONNECTOR CONFIG] Active Connector(s): {', '.join(active_connectors)}")
+else:
+    print("[CONNECTOR CONFIG] No connectors configured yet (CRM/WhatsApp/Email).")

@@ -17,7 +17,8 @@ from app.services.memory_service import get_all_memories
 from app.services.database_chat_history import get_messages
 from app.services.llm_service import LLMError
 from app.services.tts_service import generate_speech
-from app.core.config import active_llm, active_tts
+from app.core.config import active_llm, active_tts, settings
+from app.connectors import SUPPORTED_ACTIONS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ def chat(request: ChatRequest):
         reply = process_message(
             request.message,
             session_id,
+            mode=request.response_mode,
         )
     except LLMError:
         logger.warning("Chat request could not produce a valid LLM response")
@@ -86,6 +88,7 @@ def history(session_id: str = DEFAULT_SESSION_ID):
             {
                 "sender": "You" if msg.role == "user" else "AI",
                 "text": msg.content,
+                "mode": msg.mode,
             }
             for msg in messages
         ]
@@ -111,6 +114,18 @@ def clear(session_id: str = DEFAULT_SESSION_ID):
 
 
 
+def _configured_connectors() -> list[str]:
+    """Report which connectors are ready (by config), never their secrets."""
+    connectors = []
+    if settings.CRM_CONTACTS:
+        connectors.append("crm")
+    if settings.WA_TOKEN and settings.WA_PHONE_NUMBER_ID:
+        connectors.append("whatsapp")
+    if settings.EMAIL_HOST and settings.EMAIL_USERNAME:
+        connectors.append("email")
+    return connectors
+
+
 @router.get("/status")
 def status():
     return {
@@ -119,6 +134,8 @@ def status():
         "llm_providers": active_llm,
         "tts_engine": active_tts[0] if active_tts else "None configured",
         "tts_providers": active_tts,
+        "connectors": _configured_connectors(),
+        "supported_actions": sorted(SUPPORTED_ACTIONS),
     }
 
 
