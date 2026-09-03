@@ -102,6 +102,7 @@
 }
 
 .main-content {
+  position: relative;
   display: flex;
   width: min(100%, 980px);
   min-height: 0;
@@ -136,6 +137,10 @@
   --voice-reactive-gradient-x: 50%;
   --voice-reactive-gradient-y: 50%;
   --voice-reactive-gradient-size: 118%;
+  --liquid-wave-opacity: 0.24;
+  --liquid-wave-scale: 1;
+  --liquid-wave-speed: 12s;
+  --liquid-wave-shift: 0%;
   display: flex;
   flex: 0 0 auto;
   transform: scale(var(--voice-reactive-scale));
@@ -171,10 +176,10 @@
   border-radius: 50%;
   background: radial-gradient(
     circle,
-    rgba(243, 93, 39, 0.19) 0%,
-    rgba(255, 150, 94, 0.13) 31%,
-    rgba(255, 190, 145, 0.07) 54%,
-    rgba(255, 211, 176, 0.025) 70%,
+    rgba(255, 167, 59, 0.24) 0%,
+    rgba(255, 139, 43, 0.18) 28%,
+    rgba(255, 106, 28, 0.1) 48%,
+    rgba(252, 19, 4, 0.04) 66%,
     transparent 82%
   );
   content: "";
@@ -198,25 +203,26 @@
   z-index: 1;
   width: var(--orb-size);
   height: var(--orb-size);
-  overflow: visible;
+  overflow: hidden;
+  isolation: isolate;
   background:
-    radial-gradient(circle at 44% 42%, rgba(255, 156, 96, 0.5) 0%, transparent 34%),
+    radial-gradient(circle at 38% 31%, #FFA73B 0 7%, rgba(255, 167, 59, 0.66) 17%, transparent 39%),
+    radial-gradient(circle at 69% 72%, rgba(217, 2, 6, 0.72) 0 8%, transparent 38%),
     radial-gradient(
       circle at 51% 52%,
-      #ed4a12 0%,
-      #f25a20 23%,
-      rgba(248, 102, 47, 0.94) 42%,
-      rgba(255, 143, 87, 0.75) 60%,
-      rgba(255, 178, 128, 0.42) 75%,
-      rgba(255, 207, 172, 0.13) 89%,
-      transparent 100%
+      #FF8B2B 0%,
+      #FF8B2B 27%,
+      #FF6A1C 47%,
+      #FC1304 66%,
+      #D90206 80%,
+      rgba(217, 2, 6, 0) 100%
     );
   background-position: 50% 50%;
   background-size: 118% 118%;
   box-shadow:
-    0 0 34px rgba(243, 93, 39, 0.34),
-    0 0 82px rgba(243, 93, 39, 0.24),
-    0 0 142px rgba(255, 157, 99, 0.13);
+    0 0 30px rgba(255, 139, 43, 0.48),
+    0 0 80px rgba(255, 106, 28, 0.3),
+    0 0 144px rgba(252, 19, 4, 0.14);
   filter: blur(1.2px) saturate(1.04);
   transform: translate(-50%, -50%);
   will-change: background-position, border-radius, box-shadow, filter, transform;
@@ -225,15 +231,48 @@
 .ai-orb::after {
   position: absolute;
   inset: 7%;
+  z-index: 3;
   border-radius: 48% 52% 50% 50%;
   background:
-    radial-gradient(circle at 36% 35%, rgba(255, 197, 151, 0.32), transparent 38%),
-    radial-gradient(circle at 67% 64%, rgba(206, 49, 5, 0.2), transparent 46%);
+    radial-gradient(circle at 34% 30%, rgba(255, 167, 59, 0.68), transparent 36%),
+    radial-gradient(circle at 68% 68%, rgba(252, 19, 4, 0.36), transparent 48%);
   content: "";
   filter: blur(17px);
   opacity: 0.72;
   pointer-events: none;
   animation: orb-current 12s ease-in-out infinite alternate;
+}
+
+.orb-liquid-wave {
+  position: absolute;
+  z-index: 2;
+  inset: -18%;
+  border-radius: 46% 54% 52% 48%;
+  pointer-events: none;
+  transform: translate3d(var(--liquid-wave-shift), 0, 0) scale(var(--liquid-wave-scale));
+  transform-origin: center;
+  will-change: transform, background-position, opacity;
+}
+
+.orb-liquid-wave-back {
+  background:
+    radial-gradient(ellipse at 20% 72%, rgba(255, 167, 59, 0.78) 0 10%, transparent 42%),
+    linear-gradient(164deg, transparent 28%, rgba(255, 106, 28, 0.66) 45%, rgba(252, 19, 4, 0.38) 53%, transparent 65%);
+  background-size: 145% 135%, 180% 180%;
+  filter: blur(10px);
+  opacity: calc(var(--liquid-wave-opacity) * 0.8);
+  animation: liquid-wave-drift var(--liquid-wave-speed) ease-in-out infinite alternate;
+}
+
+.orb-liquid-wave-front {
+  background:
+    radial-gradient(ellipse at 76% 28%, rgba(255, 167, 59, 0.72) 0 9%, transparent 38%),
+    linear-gradient(18deg, transparent 32%, rgba(255, 139, 43, 0.5) 46%, rgba(255, 106, 28, 0.38) 54%, transparent 66%);
+  background-size: 135% 150%, 190% 170%;
+  filter: blur(7px);
+  mix-blend-mode: screen;
+  opacity: calc(var(--liquid-wave-opacity) * 0.72);
+  animation: liquid-wave-flow calc(var(--liquid-wave-speed) * 0.82) ease-in-out infinite alternate-reverse;
 }
 
 .orb-ring {
@@ -254,16 +293,18 @@
 }
 
 .orb-listening .ai-orb {
-  animation: orb-listen 2.8s ease-in-out infinite;
+  /* Real microphone energy drives the reactive shell. Keep the base state
+     bright, but do not add an unrelated looping pulse on top of it. */
+  animation: none;
   filter: blur(1px) saturate(1.08) brightness(1.08);
 }
 
 .orb-listening .orb-stage::before {
-  animation: halo-listen 2.8s ease-in-out infinite;
+  animation: none;
 }
 
 .orb-listening .orb-ring {
-  animation: ring-listen 3.2s ease-in-out infinite;
+  animation: none;
 }
 
 .orb-thinking .ai-orb {
@@ -275,15 +316,17 @@
 }
 
 .orb-speaking .ai-orb {
-  animation: orb-speak 1.45s ease-in-out infinite;
+  /* Speaking motion follows decoded TTS audio energy when available. */
+  animation: none;
+  filter: blur(1px) saturate(1.06) brightness(1.04);
 }
 
 .orb-speaking .orb-stage::before {
-  animation: halo-speak 1.45s ease-in-out infinite;
+  animation: none;
 }
 
 .orb-speaking .orb-ring {
-  animation: ring-speak 2.4s ease-in-out infinite;
+  animation: none;
 }
 
 /* Space reserved by overflow detection for the compact conversation orb. */
@@ -1021,14 +1064,16 @@
 
 @keyframes orb-think {
   0%, 100% {
-    border-radius: 50% 48% 52% 49%;
-    background-position: 44% 48%;
-    transform: translate(-50%, -50%) scale(0.995);
+    border-radius: 50% 46% 52% 48%;
+    background-position: 42% 46%;
+    filter: blur(1px) saturate(1.05) brightness(1.03);
+    transform: translate(-50%, -50%) scale(0.985);
   }
   50% {
-    border-radius: 48% 52% 49% 51%;
-    background-position: 57% 52%;
-    transform: translate(-50%, -50%) scale(1.018);
+    border-radius: 47% 52% 49% 53%;
+    background-position: 59% 54%;
+    filter: blur(1px) saturate(1.14) brightness(1.09);
+    transform: translate(-50%, -50%) scale(1.035);
   }
 }
 
@@ -1057,6 +1102,20 @@
   0% { opacity: 0.56; transform: translate(-2%, -1%) scale(0.96) rotate(-2deg); }
   50% { opacity: 0.82; transform: translate(2%, 1%) scale(1.04) rotate(2deg); }
   100% { opacity: 0.64; transform: translate(-1%, 2%) scale(0.99) rotate(-1deg); }
+}
+
+/* Internal molten energy drifting inside the sphere. The wave element is
+   oversized and clipped by the orb, so only the inner portion is ever shown. */
+@keyframes liquid-wave-drift {
+  0% { background-position: 0% 0%, 0% 0%; transform: translate3d(var(--liquid-wave-shift), -5%, 0) scale(var(--liquid-wave-scale)) rotate(-5deg); }
+  50% { background-position: 34% 20%, -18% 44%; transform: translate3d(var(--liquid-wave-shift), 3%, 0) scale(calc(var(--liquid-wave-scale) * 1.03)) rotate(4deg); }
+  100% { background-position: 8% -12%, 30% -20%; transform: translate3d(var(--liquid-wave-shift), 6%, 0) scale(var(--liquid-wave-scale)) rotate(-2deg); }
+}
+
+@keyframes liquid-wave-flow {
+  0% { background-position: 100% 100%, 100% 0%; transform: translate3d(calc(var(--liquid-wave-shift) * -0.6), 5%, 0) scale(var(--liquid-wave-scale)) rotate(6deg); }
+  50% { background-position: 60% 40%, 20% 52%; transform: translate3d(calc(var(--liquid-wave-shift) * -0.6), -3%, 0) scale(calc(var(--liquid-wave-scale) * 1.04)) rotate(-5deg); }
+  100% { background-position: 90% 12%, 66% -18%; transform: translate3d(calc(var(--liquid-wave-shift) * -0.6), -6%, 0) scale(var(--liquid-wave-scale)) rotate(2deg); }
 }
 
 @keyframes halo-breathe {
@@ -1345,7 +1404,103 @@
   will-change: auto;
 }
 
-.audio-visualizer-container.orb-listening .ai-orb {
+/* Voice activity is a temporary presentation override. In a long chat it
+   floats over the existing conversation instead of reclaiming its vertical
+   space or changing the normal overflow decision. */
+.main-content.orb-hidden.voice-orb-active .audio-visualizer-container {
+  position: absolute;
+  z-index: 4;
+  top: clamp(10px, 1.6vh, 18px);
+  left: 50%;
+  margin: 0;
+  overflow: visible;
+  opacity: 1;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+/* In a scrollable conversation the active orb becomes a real bottom lane
+   above the input. Reserving its height keeps messages from overlapping it
+   while the chat stays visible and scrollable. */
+.main-content.has-messages.orb-hidden.voice-orb-active .audio-visualizer-container {
+  position: relative;
+  top: auto;
+  left: auto;
+  order: 1;
+  transform: none;
+  width: 100%;
+  height: 118px;
+  max-height: 118px;
+  margin-bottom: 2px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.main-content.has-messages.orb-hidden.voice-orb-active .chat-box {
+  order: 0;
+}
+
+.main-content.has-messages.orb-hidden.voice-orb-active .input-container {
+  order: 2;
+}
+
+.main-content.has-messages.orb-hidden.voice-orb-active .orb-stage {
+  --orb-size: 92px;
+  --orb-ring-size: 116px;
+  --orb-halo-size: 132px;
+  width: 150px;
+  height: 118px;
+}
+
+.main-content:not(.has-messages).orb-hidden.voice-orb-active .audio-visualizer-container {
+  width: 360px;
+  height: 298px;
+  max-height: 298px;
+}
+
+@media (max-width: 640px) {
+  .main-content:not(.has-messages).orb-hidden.voice-orb-active .audio-visualizer-container {
+    width: 270px;
+    height: 218px;
+    max-height: 218px;
+  }
+}
+
+.main-content.orb-hidden.voice-orb-active .orb-stage,
+.main-content.orb-hidden.voice-orb-active .orb-stage::before,
+.main-content.orb-hidden.voice-orb-active .ai-orb,
+.main-content.orb-hidden.voice-orb-active .ai-orb::after,
+.main-content.orb-hidden.voice-orb-active .orb-ring {
+  animation-play-state: running;
+}
+
+.main-content.orb-hidden.voice-orb-active .orb-reactive-shell {
+  will-change: transform, filter;
+}
+
+/* The compact idle style is intentionally overridden during actual voice
+   activity so it cannot mask Listening, Thinking, or Speaking. */
+.main-content.has-messages .audio-visualizer-container.orb-listening .ai-orb,
+.main-content.has-messages .audio-visualizer-container.orb-speaking .ai-orb {
+  animation: none;
+}
+
+.main-content.has-messages .audio-visualizer-container.orb-thinking .ai-orb {
+  animation: orb-think 7.5s ease-in-out infinite;
+}
+
+.main-content.has-messages .audio-visualizer-container.orb-listening .orb-stage::before,
+.main-content.has-messages .audio-visualizer-container.orb-speaking .orb-stage::before {
+  animation: none;
+}
+
+.main-content.has-messages .audio-visualizer-container.orb-listening .orb-ring,
+.main-content.has-messages .audio-visualizer-container.orb-speaking .orb-ring {
+  animation: none;
+}
+
+.audio-visualizer-container.orb-listening .ai-orb,
+.audio-visualizer-container.orb-speaking .ai-orb {
   background-position:
     var(--voice-reactive-gradient-x)
     var(--voice-reactive-gradient-y);
@@ -1355,19 +1510,22 @@
   transition: background-position 60ms linear, background-size 60ms linear;
 }
 
-.audio-visualizer-container.orb-listening .ai-orb::after {
+.audio-visualizer-container.orb-listening .ai-orb::after,
+.audio-visualizer-container.orb-speaking .ai-orb::after {
   filter:
     blur(17px)
     brightness(var(--voice-reactive-inner-brightness));
   transition: filter 90ms ease-out;
 }
 
-.audio-visualizer-container.orb-listening .orb-stage::before {
+.audio-visualizer-container.orb-listening .orb-stage::before,
+.audio-visualizer-container.orb-speaking .orb-stage::before {
   scale: var(--voice-reactive-halo-scale);
   transition: filter 70ms ease-out, scale 60ms linear;
 }
 
-.audio-visualizer-container.orb-listening .orb-ring {
+.audio-visualizer-container.orb-listening .orb-ring,
+.audio-visualizer-container.orb-speaking .orb-ring {
   scale: var(--voice-reactive-ring-scale);
   filter: brightness(var(--voice-reactive-inner-brightness));
   transition: scale 60ms linear, filter 70ms ease-out;
@@ -1390,27 +1548,36 @@
 
   .orb-reactive-shell,
   .audio-visualizer-container.orb-listening .ai-orb,
+  .audio-visualizer-container.orb-speaking .ai-orb,
   .audio-visualizer-container.orb-listening .ai-orb::after,
+  .audio-visualizer-container.orb-speaking .ai-orb::after,
   .audio-visualizer-container.orb-listening .orb-stage::before,
-  .audio-visualizer-container.orb-listening .orb-ring {
+  .audio-visualizer-container.orb-speaking .orb-stage::before,
+  .audio-visualizer-container.orb-listening .orb-ring,
+  .audio-visualizer-container.orb-speaking .orb-ring {
     transition: none !important;
   }
 
-  .audio-visualizer-container.orb-listening .ai-orb {
+  .audio-visualizer-container.orb-listening .ai-orb,
+  .audio-visualizer-container.orb-speaking .ai-orb {
     background-position: 50% 50% !important;
     background-size: 118% 118% !important;
   }
 
   .audio-visualizer-container.orb-listening .orb-stage::before,
-  .audio-visualizer-container.orb-listening .orb-ring {
+  .audio-visualizer-container.orb-speaking .orb-stage::before,
+  .audio-visualizer-container.orb-listening .orb-ring,
+  .audio-visualizer-container.orb-speaking .orb-ring {
     scale: 1 !important;
   }
 
-  .audio-visualizer-container.orb-listening .orb-stage::before {
+  .audio-visualizer-container.orb-listening .orb-stage::before,
+  .audio-visualizer-container.orb-speaking .orb-stage::before {
     filter: blur(var(--orb-halo-blur)) !important;
   }
 
-  .audio-visualizer-container.orb-listening .orb-ring {
+  .audio-visualizer-container.orb-listening .orb-ring,
+  .audio-visualizer-container.orb-speaking .orb-ring {
     filter: none !important;
   }
 }

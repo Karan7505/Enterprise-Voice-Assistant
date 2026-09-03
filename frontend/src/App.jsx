@@ -37,12 +37,14 @@ const releaseAudioElement = (audioRef) => {
   const audio = audioRef.current;
   if (!audio) return;
 
-  audio.pause();
   audio.onplay = null;
   audio.onloadedmetadata = null;
   audio.ontimeupdate = null;
   audio.onended = null;
   audio.onerror = null;
+  audio.onpause = null;
+  audio.onabort = null;
+  audio.pause();
   audio.removeAttribute("src");
   audio.load();
   audioRef.current = null;
@@ -103,6 +105,8 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [voiceLevel, setVoiceLevel] = useState(0);
+  const [playbackLevel, setPlaybackLevel] = useState(0);
+  const [voiceOrbActivity, setVoiceOrbActivity] = useState("idle");
   const [pendingRequests, setPendingRequests] = useState(0);
   const [chatScrollable, setChatScrollable] = useState(false);
   const [conversationStarted, setConversationStarted] = useState(false);
@@ -120,6 +124,7 @@ function App() {
   const audioRef = useRef(null);
   const activeVoiceTranscriptRef = useRef(null);
   const playbackSequenceRef = useRef(0);
+  const playbackAnalysisRef = useRef(null);
   const sessionEpochRef = useRef(0);
   const activeChatRequestsRef = useRef(new Set());
   const clearedSectionsRef = useRef({ conversation: false, memory: false });
@@ -170,19 +175,163 @@ function App() {
     });
   }, []);
 
+  const stopPlaybackAnalysis = useCallback(() => {
+    const analysis = playbackAnalysisRef.current;
+    playbackAnalysisRef.current = null;
+
+    if (analysis?.frameId !== null && analysis?.frameId !== undefined) {
+      window.cancelAnimationFrame(analysis.frameId);
+    }
+    try { analysis?.source?.disconnect(); } catch { /* already disconnected */ }
+    try { analysis?.analyser?.disconnect(); } catch { /* already disconnected */ }
+    if (analysis?.context && analysis.context.state !== "closed") {
+      analysis.context.close().catch(() => {});
+    }
+    setPlaybackLevel(0);
+  }, []);
+
+  const startPlaybackAnalysis = useCallback(async (audio, playbackToken) => {
+    stopPlaybackAnalysis();
+
+    if (
+      !audio ||
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+
+    const analysis = {
+      audio,
+      playbackToken,
+      context: null,
+      source: null,
+      analyser: null,
+      frameId: null,
+      samples: null,
+      smoothedLevel: 0,
+      publishedLevel: 0,
+      lastPublishTime: 0,
+    };
+
+    const disposeAnalysis = () => {
+      if (analysis.frameId !== null) {
+        window.cancelAnimationFrame(analysis.frameId);
+        analysis.frameId = null;
+      }
+      try { analysis.source?.disconnect(); } catch { /* already disconnected */ }
+      try { analysis.analyser?.disconnect(); } catch { /* already disconnected */ }
+      if (analysis.context?.state !== "closed") {
+        analysis.context?.close().catch(() => {});
+      }
+      if (playbackAnalysisRef.current === analysis) {
+        playbackAnalysisRef.current = null;
+        setPlaybackLevel(0);
+      }
+    };
+
+    try {
+      const context = new AudioContext();
+      analysis.context = context;
+
+      if (context.state !== "running") {
+        await context.resume();
+      }
+
+      if (
+        context.state !== "running" ||
+        audioRef.current !== audio ||
+        playbackSequenceRef.current !== playbackToken
+      ) {
+        disposeAnalysis();
+        return;
+      }
+
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.58;
+      const source = context.createMediaElementSource(audio);
+      source.connect(analyser);
+      analyser.connect(context.destination);
+
+      analysis.analyser = analyser;
+      analysis.source = source;
+      analysis.samples = new Uint8Array(analyser.fftSize);
+      playbackAnalysisRef.current = analysis;
+
+      const samplePlaybackEnergy = (now) => {
+        if (
+          playbackAnalysisRef.current !== analysis ||
+          audioRef.current !== audio ||
+          playbackSequenceRef.current !== playbackToken
+        ) {
+          disposeAnalysis();
+          return;
+        }
+
+        analyser.getByteTimeDomainData(analysis.samples);
+        let sum = 0;
+        for (let index = 0; index < analysis.samples.length; index += 1) {
+          const centered = (analysis.samples[index] - 128) / 128;
+          sum += centered * centered;
+        }
+
+        const rms = Math.sqrt(sum / analysis.samples.length);
+        const normalized = Math.min(1, Math.max(0, (rms - 0.008) / 0.13));
+        analysis.smoothedLevel += (normalized - analysis.smoothedLevel) * 0.42;
+
+        if (now - analysis.lastPublishTime >= 33) {
+          const nextLevel = Number(analysis.smoothedLevel.toFixed(3));
+          if (Math.abs(nextLevel - analysis.publishedLevel) >= 0.012) {
+            analysis.publishedLevel = nextLevel;
+            setPlaybackLevel(nextLevel);
+          }
+          analysis.lastPublishTime = now;
+        }
+
+        analysis.frameId = window.requestAnimationFrame(samplePlaybackEnergy);
+      };
+
+      analysis.frameId = window.requestAnimationFrame(samplePlaybackEnergy);
+    } catch {
+      // Audio playback remains available through the native element if the
+      // analyser cannot be attached (for example, due to a CORS policy).
+      disposeAnalysis();
+    }
+  }, [stopPlaybackAnalysis]);
+
   const stopResponsePlayback = useCallback(() => {
     const activeTranscript = activeVoiceTranscriptRef.current;
     playbackSequenceRef.current += 1;
     if (activeTranscript) {
       finalizeVoiceTranscript(activeTranscript.playbackToken);
     }
+    stopPlaybackAnalysis();
     releaseAudioElement(audioRef);
     setIsPlaying(false);
-  }, [finalizeVoiceTranscript]);
+    setVoiceOrbActivity((currentActivity) => (
+      ["speaking", "thinking"].includes(currentActivity)
+        ? "idle"
+        : currentActivity
+    ));
+  }, [finalizeVoiceTranscript, stopPlaybackAnalysis]);
 
-  const isOrbHidden = messages.length > 0 && chatScrollable;
+  // Keep the normal conversation layout independent from active voice work.
+  // A typed draft gets the empty-state orb out of the way, while a long chat
+  // remains collapsed until an actual voice lifecycle temporarily overrides it.
+  const hasTypedDraft = message.trim().length > 0;
+  const isOrbHidden = hasTypedDraft || (messages.length > 0 && chatScrollable);
+  const isVoiceOrbActive = voiceOrbActivity !== "idle";
+  const isOrbVisible = !isOrbHidden || isVoiceOrbActive;
+  const orbActivityLevel = voiceOrbActivity === "listening"
+    ? voiceLevel
+    : voiceOrbActivity === "speaking"
+      ? playbackLevel
+      : 0;
   const isJarvisBusy =
-    message.length > 0 ||
+    hasTypedDraft ||
     isRecordingIntent ||
     isListening ||
     pendingRequests > 0 ||
@@ -254,8 +403,29 @@ function App() {
 
   useEffect(() => () => {
     activeVoiceTranscriptRef.current = null;
+    stopPlaybackAnalysis();
     releaseAudioElement(audioRef);
-  }, []);
+  }, [stopPlaybackAnalysis]);
+
+  // Recording becomes Listening only after MediaRecorder has actually
+  // started. A denied permission request therefore returns straight to idle.
+  const handleRecordingIntentChange = useCallback((recordingIntent) => {
+    setIsRecordingIntent(recordingIntent);
+    if (recordingIntent) {
+      stopResponsePlayback();
+    }
+  }, [stopResponsePlayback]);
+
+  useEffect(() => {
+    if (isListening) {
+      setVoiceOrbActivity("listening");
+      return;
+    }
+
+    setVoiceOrbActivity((currentActivity) => (
+      currentActivity === "listening" ? "idle" : currentActivity
+    ));
+  }, [isListening]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -310,10 +480,10 @@ function App() {
   }, [messages.length]);
 
   useEffect(() => {
-    if (!isListening || isOrbHidden) {
+    if (!isListening) {
       setVoiceLevel(0);
     }
-  }, [isOrbHidden, isListening]);
+  }, [isListening]);
 
   const playAudio = useCallback(async (url, transcript = null) => {
     if (!url) return;
@@ -330,17 +500,31 @@ function App() {
       }
 
       if (audio && audioRef.current === audio) {
+        stopPlaybackAnalysis();
         setIsPlaying(false);
+        setVoiceOrbActivity((currentActivity) => (
+          currentActivity === "speaking" || currentActivity === "thinking"
+            ? "idle"
+            : currentActivity
+        ));
         audio.onplay = null;
         audio.onloadedmetadata = null;
         audio.ontimeupdate = null;
         audio.onended = null;
         audio.onerror = null;
+        audio.onpause = null;
+        audio.onabort = null;
         audio.removeAttribute("src");
         audio.load();
         audioRef.current = null;
       } else if (!audioRef.current) {
+        stopPlaybackAnalysis();
         setIsPlaying(false);
+        setVoiceOrbActivity((currentActivity) => (
+          currentActivity === "speaking" || currentActivity === "thinking"
+            ? "idle"
+            : currentActivity
+        ));
       }
     };
 
@@ -350,7 +534,11 @@ function App() {
       playbackSequenceRef.current = playbackToken;
 
       const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
-      audio = new Audio(fullUrl);
+      audio = new Audio();
+      // Set this before src so same-origin and configured API-hosted audio can
+      // be analysed without changing native playback when analysis is blocked.
+      audio.crossOrigin = "anonymous";
+      audio.src = fullUrl;
       audioRef.current = audio;
 
       if (transcript?.messageId && typeof transcript.fullText === "string") {
@@ -380,20 +568,28 @@ function App() {
       audio.onplay = () => {
         if (audioRef.current !== audio) return;
         setIsPlaying(true);
+        setVoiceOrbActivity("speaking");
+        void startPlaybackAnalysis(audio, playbackToken);
         updateTranscriptProgress();
       };
-      audio.onloadedmetadata = updateTranscriptProgress;
       audio.ontimeupdate = updateTranscriptProgress;
       audio.onended = finishPlayback;
       audio.onerror = finishPlayback;
+      audio.onpause = finishPlayback;
+      audio.onabort = finishPlayback;
 
-      setIsPlaying(true);
       await audio.play();
     } catch (err) {
       finishPlayback();
       console.error("Audio playback error:", err);
     }
-  }, [finalizeVoiceTranscript, stopResponsePlayback, updateVoiceTranscript]);
+  }, [
+    finalizeVoiceTranscript,
+    startPlaybackAnalysis,
+    stopPlaybackAnalysis,
+    stopResponsePlayback,
+    updateVoiceTranscript,
+  ]);
 
   const sendMessage = async (textToSend) => {
     const userMessage = (textToSend || message).trim();
@@ -439,6 +635,9 @@ function App() {
     setConversationStarted(true);
     setIsAmbientIdle(false);
     stopResponsePlayback();
+    // A valid voice note has left the recorder and is now being processed.
+    // This is deliberately separate from generic text request activity.
+    setVoiceOrbActivity("thinking");
 
     // Keep the captured transcript internally for the existing voice request,
     // but render only the audio note in the user-facing conversation.
@@ -497,10 +696,17 @@ function App() {
           messageId: assistantMessageId,
           fullText: replyText,
         });
+      } else if (responseMode === "voice") {
+        // Text still appears if TTS is unavailable, but the temporary voice
+        // presentation must not remain in Thinking after that failure.
+        setVoiceOrbActivity("idle");
       }
     } catch (error) {
       if (requestEpoch !== sessionEpochRef.current) return;
       console.error("API error:", error);
+      if (responseMode === "voice") {
+        setVoiceOrbActivity("idle");
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -522,6 +728,7 @@ function App() {
     fullResetInFlightRef.current = true;
     sessionEpochRef.current += 1;
     stopResponsePlayback();
+    setVoiceOrbActivity("idle");
     setIsFullResetting(true);
     setIsAmbientIdle(false);
     setInitialDataLoaded(false);
@@ -537,6 +744,7 @@ function App() {
     conversationClearInFlightRef.current = false;
     setIsListening(false);
     setVoiceLevel(0);
+    setPlaybackLevel(0);
     setResetEpoch((epoch) => epoch + 1);
     let serverResetSucceeded = false;
     try {
@@ -591,6 +799,7 @@ function App() {
     conversationClearInFlightRef.current = true;
     sessionEpochRef.current += 1;
     stopResponsePlayback();
+    setVoiceOrbActivity("idle");
     setIsClearingConversation(true);
     setMessages([]);
     setVoiceTranscriptReveal(null);
@@ -679,14 +888,14 @@ function App() {
           </div>
         </header>
 
-        <main className={`main-content${messages.length ? " has-messages" : ""}${isOrbHidden ? " orb-hidden" : ""}`}>
+        <main
+          className={`main-content${messages.length ? " has-messages" : ""}${isOrbHidden ? " orb-hidden" : ""}${isVoiceOrbActive ? " voice-orb-active" : ""}`}
+        >
           <AudioVisualizer
-            isPlaying={isPlaying}
-            isListening={isListening}
-            isThinking={!isFullResetting && pendingRequests > 0}
-            isVisible={!isOrbHidden}
+            activity={voiceOrbActivity}
+            isVisible={isOrbVisible}
             isAmbientIdle={ambientEnabled}
-            voiceLevel={isOrbHidden ? 0 : voiceLevel}
+            activityLevel={orbActivityLevel}
           />
 
           <ChatWindow
@@ -695,6 +904,7 @@ function App() {
             voiceTranscriptReveal={voiceTranscriptReveal}
             userName={userName}
             isOrbCollapsed={isOrbHidden}
+            freezeOverflowMeasurements={isVoiceOrbActive}
             onScrollableChange={setChatScrollable}
           />
 
@@ -709,8 +919,8 @@ function App() {
             isDisabled={
               isFullResetting || (isClearingConversation && !isListening)
             }
-            isVoiceReactiveEnabled={!isOrbHidden}
-            onRecordingIntentChange={setIsRecordingIntent}
+            isVoiceReactiveEnabled={true}
+            onRecordingIntentChange={handleRecordingIntentChange}
             onVoiceLevelChange={setVoiceLevel}
           />
         </main>

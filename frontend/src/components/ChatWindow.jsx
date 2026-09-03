@@ -16,6 +16,7 @@ function ChatWindow({
   voiceTranscriptReveal,
   userName,
   isOrbCollapsed,
+  freezeOverflowMeasurements = false,
   onScrollableChange,
 }) {
   const chatEndRef = useRef(null);
@@ -62,6 +63,10 @@ function ChatWindow({
       onScrollableChange(false);
       return undefined;
     }
+    // Voice activity can temporarily place an orb over a collapsed long
+    // conversation. That presentation must not rewrite the normal overflow
+    // decision that will be restored once the voice lifecycle ends.
+    if (freezeOverflowMeasurements) return undefined;
 
     let animationFrameId = null;
 
@@ -126,7 +131,7 @@ function ChatWindow({
       resizeObserver?.disconnect();
       window.removeEventListener("resize", scheduleMeasurement);
     };
-  }, [isOrbCollapsed, messages, onScrollableChange]);
+  }, [freezeOverflowMeasurements, isOrbCollapsed, messages, onScrollableChange]);
 
   // If the reader was already at the newest message, keep that position while
   // the orb's smooth height transition changes the chat viewport.
