@@ -1,5 +1,31 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Icon from "./Icon";
+
+// Human-readable labels: favorite_color -> "Favorite Color"
+const formatMemoryLabel = (key) => {
+  const words = String(key || "")
+    .toLowerCase()
+    .replace(/[_\-.]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) return String(key || "");
+  return words
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+};
+
+// Normalize short structured values ("blue", "yes", "python") to Title Case.
+// Longer values (sentences, addresses) are left untouched.
+const formatMemoryValue = (value) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return raw;
+  const words = raw.split(/\s+/);
+  if (raw.length > 24 || words.length > 3) return raw;
+  if (/\d/.test(raw)) return raw;
+  if (!/^[a-z0-9][a-z0-9 _-]*$/i.test(raw)) return raw;
+  return raw.replace(/[a-z0-9]+/gi, (w) => w.charAt(0).toUpperCase() + w.slice(1));
+};
 
 function MemorySidebar({
   memories,
@@ -9,10 +35,6 @@ function MemorySidebar({
   isClearDisabled = false,
 }) {
   const [filter, setFilter] = useState("");
-  const [copyState, setCopyState] = useState({ key: null, status: "idle" });
-  const copyTimerRef = useRef(null);
-
-  useEffect(() => () => clearTimeout(copyTimerRef.current), []);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -30,24 +52,6 @@ function MemorySidebar({
     key.toLowerCase().includes(filter.toLowerCase()) ||
     String(memories[key]).toLowerCase().includes(filter.toLowerCase())
   );
-
-  const copyToClipboard = async (key, value) => {
-    clearTimeout(copyTimerRef.current);
-    try {
-      if (!navigator.clipboard) {
-        throw new Error("Clipboard API unavailable");
-      }
-      await navigator.clipboard.writeText(`${key}: ${value}`);
-      setCopyState({ key, status: "copied" });
-    } catch (error) {
-      console.error("Clipboard copy failed:", error);
-      setCopyState({ key, status: "error" });
-    }
-    copyTimerRef.current = setTimeout(
-      () => setCopyState({ key: null, status: "idle" }),
-      2000,
-    );
-  };
 
   return (
     <>
@@ -70,13 +74,7 @@ function MemorySidebar({
         <div className="sidebar-header">
           <div className="sidebar-title">
             <Icon name="memory" size={20} />
-            <div>
-              <span className="sidebar-eyebrow">Personal context</span>
-              <h2 id="memory-drawer-title">Memory</h2>
-            </div>
-            <span className="memory-badge" aria-label={`${memoryKeys.length} saved memories`}>
-              {memoryKeys.length}
-            </span>
+            <h2 id="memory-drawer-title">Memory</h2>
           </div>
           <button
             type="button"
@@ -117,29 +115,14 @@ function MemorySidebar({
               <span>Try a different search.</span>
             </div>
           ) : (
-            filteredKeys.map((key) => {
-              const isCopied = copyState.key === key && copyState.status === "copied";
-              const hasCopyError = copyState.key === key && copyState.status === "error";
-
-              return (
-                <div key={key} className="memory-card">
-                  <div className="memory-card-header">
-                    <span className="memory-key">{key}</span>
-                    <button
-                      type="button"
-                      className="copy-btn"
-                      onClick={() => copyToClipboard(key, memories[key])}
-                      title={isCopied ? "Copied" : hasCopyError ? "Copy failed" : "Copy memory"}
-                      aria-label={isCopied ? `${key} copied` : hasCopyError ? `Could not copy ${key}` : `Copy ${key}`}
-                      tabIndex={isOpen ? 0 : -1}
-                    >
-                      <Icon name={isCopied ? "check" : hasCopyError ? "alert" : "copy"} size={15} />
-                    </button>
-                  </div>
-                  <div className="memory-value">{String(memories[key])}</div>
+            filteredKeys.map((key) => (
+              <div key={key} className="memory-card">
+                <div className="memory-card-header">
+                  <span className="memory-key">{formatMemoryLabel(key)}</span>
                 </div>
-              );
-            })
+                <div className="memory-value">{formatMemoryValue(memories[key])}</div>
+              </div>
+            ))
           )}
         </div>
 

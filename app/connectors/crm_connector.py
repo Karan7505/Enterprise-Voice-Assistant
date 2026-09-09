@@ -9,6 +9,11 @@ a custom REST API, ...) by subclassing and returning it from ``get_crm()``.
 
 from __future__ import annotations
 
+import json
+import logging
+import urllib.error
+import urllib.parse
+import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -109,8 +114,129 @@ class DirectoryCRM(BaseCRM):
         return list(self._contacts)
 
 
+class RestCRM(BaseCRM):
+    """A real external CRM reached over HTTP, configured entirely by env vars.
+
+    This is provider-agnostic: it issues a single search request and maps the
+    returned items onto ``Contact`` using configurable field names (with
+    common aliases), so a specific CRM such as Salesforce, HubSpot, or a
+    custom internal API can be wired up purely through ``.env`` — no code
+    edits. All provider-specific concerns (endpoint, auth header, response
+    shape) are captured by configuration, not hardcoded.
+
+    Configuration (see ``app/core/config.py``):
+      CRM_PROVIDER=rest
+      CRM_REST_BASE_URL, CRM_REST_API_KEY, CRM_REST_AUTH_HEADER,
+      CRM_REST_AUTH_SCHEME, CRM_REST_SEARCH_PATH, CRM_REST_QUERY_PARAM,
+      CRM_REST_RESULTS_KEY, CRM_REST_TIMEOUT, CRM_REST_*_FIELD.
+    """
+
+    logger = logging.getLogger(__name__)
+
+    # Common aliases tried (in order) when a configured field is absent.
+    _NAME_ALIASES = ("name", "full_name", "display_name", "title", "subject")
+    _PHONE_ALIASES = ("phone", "phone_number", "mobile", "mobile_phone", "work_phone", "mobile_phone_number")
+    _EMAIL_ALIASES = ("email", "email_address", "primary_email")
+
+    def __init__(self, settings):
+        self._s = settings
+        self._contacts: list[Contact] = []
+
+    # -- field extraction ----------------------------------------------------
+    @staticmethod
+    def _first(item: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+        for key in keys:
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def _map_item(self, item: dict[str, Any]) -> Contact | None:
+        if not isinstance(item, dict):
+            return None
+        s = self._s
+        name = self._first(item, (s.CRM_REST_NAME_FIELD, *self._NAME_ALIASES))
+        if not name:
+            return None
+        phone = self._first(item, (s.CRM_REST_PHONE_FIELD, *self._PHONE_ALIASES))
+        email = self._first(item, (s.CRM_REST_EMAIL_FIELD, *self._EMAIL_ALIASES))
+        role = self._first(item, ("role", "title", "job_title"))
+        kind = str(item.get("kind", "person")).strip().lower() or "person"
+        return Contact(name=name, phone=phone, email=email, role=role, kind=kind, raw=item)
+
+    # -- HTTP ---------------------------------------------------------------
+    def _search(self, name: str) -> list[dict[str, Any]]:
+        s = self._s
+        if not s.CRM_REST_BASE_URL:
+            return []
+        url = s.CRM_REST_BASE_URL + s.CRM_REST_SEARCH_PATH
+        if s.CRM_REST_QUERY_PARAM:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}{urllib.parse.urlencode({s.CRM_REST_QUERY_PARAM: name})}"
+
+        request = urllib.request.Request(url)
+        if s.CRM_REST_API_KEY:
+            scheme = f"{s.CRM_REST_AUTH_SCHEME} " if s.CRM_REST_AUTH_SCHEME else ""
+            request.add_header(s.CRM_REST_AUTH_HEADER, f"{scheme}{s.CRM_REST_API_KEY}")
+        request.add_header("Accept", "application/json")
+
+        try:
+            with urllib.request.urlopen(request, timeout=s.CRM_REST_TIMEOUT) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError) as exc:
+            self.logger.warning("CRM search request failed for %r: %s", name, exc)
+            return []
+
+        # The list of items may be top-level, nested under a configured key, or
+        # a common envelope such as {"data": [...]} / {"results": [...]} /
+        # {"contacts": [...]}.
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            for key in (s.CRM_REST_RESULTS_KEY, "data", "results", "contacts", "items", "records"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return value
+        return []
+
+    def _norm(self, value: str) -> str:
+        return " ".join(value.lower().split())
+
+    def _load(self) -> None:
+        # A live CRM is queried per name; this is a best-effort list endpoint
+        # used only for capability checks. It returns what is configured.
+        self._contacts = []
+
+    def find_contact(self, name: str) -> Contact | None:
+        needle = self._norm(name)
+        if not needle:
+            return None
+        for item in self._search(name):
+            contact = self._map_item(item)
+            if contact is None or contact.kind != "person":
+                continue
+            if needle in self._norm(contact.name) or self._norm(contact.name) in needle:
+                return contact
+        return None
+
+    def find_group(self, name: str) -> Contact | None:
+        needle = self._norm(name)
+        if not needle:
+            return None
+        for item in self._search(name):
+            contact = self._map_item(item)
+            if contact is None or contact.kind != "group":
+                continue
+            if needle in self._norm(contact.name) or self._norm(contact.name) in needle:
+                return contact
+        return None
+
+    def list_contacts(self) -> list[Contact]:
+        return list(self._contacts)
+
+
 def load_directory_from_config() -> list[dict[str, Any]]:
-    """Build the default directory from ``CRM_CONTACTS`` env config.
+    """Build the directory CRM from ``CRM_CONTACTS`` env config.
 
     ``CRM_CONTACTS`` is a JSON array of contact objects, e.g.::
 
@@ -122,12 +248,10 @@ def load_directory_from_config() -> list[dict[str, Any]]:
     Kept as JSON so the file/env stays a single source of truth and no real
     CRM credential is required for the reference directory.
     """
-    import json
-    import logging
-    import os
+    from app.core.config import settings
 
     logger = logging.getLogger(__name__)
-    raw = (os.getenv("CRM_CONTACTS") or "").strip()
+    raw = (settings.CRM_CONTACTS or "").strip()
     if not raw:
         return []
     try:
@@ -145,14 +269,21 @@ _crm_instance: BaseCRM | None = None
 
 
 def get_crm() -> BaseCRM:
-    """Return the process-wide CRM instance, building it once.
+    """Return the process-wide CRM instance, selected by ``CRM_PROVIDER``.
 
-    To use a different CRM, set ``CRM_PROVIDER`` and register a factory, or
-    replace the ``DirectoryCRM`` here. JARVIS core logic is unaffected.
+    ``directory`` uses the in-memory reference CRM; ``rest`` uses the
+    HTTP-based ``RestCRM`` configured entirely by environment variables. JARVIS
+    core logic is unaffected by which provider is active.
     """
     global _crm_instance
     if _crm_instance is None:
-        _crm_instance = DirectoryCRM(load_directory_from_config())
+        from app.core.config import settings
+
+        provider = (settings.CRM_PROVIDER or "directory").strip().lower()
+        if provider == "rest":
+            _crm_instance = RestCRM(settings)
+        else:
+            _crm_instance = DirectoryCRM(load_directory_from_config())
     return _crm_instance
 
 

@@ -9,28 +9,32 @@ import AudioVisualizer from "./components/AudioVisualizer";
 import Icon from "./components/Icon";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
-const DEFAULT_INITIAL_IDLE_DELAY_MS = 500;
-const DEFAULT_JARVIS_IDLE_DELAY_MS = 15_000;
 const CHAT_REQUEST_TIMEOUT_MS = 60_000;
 const CLEAR_REQUEST_TIMEOUT_MS = 15_000;
+const TOKEN_STORAGE_KEY = "jarvis_auth_token";
 
-const parseDelay = (rawValue, fallback, minimum) => {
-  if (typeof rawValue !== "string" || !rawValue.trim()) return fallback;
-  const parsedValue = Number(rawValue);
-  return Number.isFinite(parsedValue) && parsedValue >= 0
-    ? Math.max(minimum, Math.round(parsedValue))
-    : fallback;
+const getStoredToken = () => localStorage.getItem(TOKEN_STORAGE_KEY) || "";
+const storeToken = (token) => {
+  if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  else localStorage.removeItem(TOKEN_STORAGE_KEY);
 };
 
-const INITIAL_IDLE_DELAY_MS = parseDelay(
-  import.meta.env.VITE_JARVIS_INITIAL_IDLE_DELAY_MS,
-  DEFAULT_INITIAL_IDLE_DELAY_MS,
-  250,
-);
-const JARVIS_IDLE_DELAY_MS = parseDelay(
-  import.meta.env.VITE_JARVIS_IDLE_DELAY_MS,
-  DEFAULT_JARVIS_IDLE_DELAY_MS,
-  1_000,
+// Every request carries the bearer token; a 401 anywhere logs the user out so
+// the app returns to the login screen instead of surfacing raw auth errors.
+let unauthorizedHandler = null;
+axios.interceptors.request.use((config) => {
+  const token = getStoredToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401 && unauthorizedHandler) {
+      unauthorizedHandler();
+    }
+    return Promise.reject(error);
+  },
 );
 
 const releaseAudioElement = (audioRef) => {
@@ -102,34 +106,37 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [memories, setMemories] = useState({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [playbackLevel, setPlaybackLevel] = useState(0);
   const [voiceOrbActivity, setVoiceOrbActivity] = useState("idle");
-  const [pendingRequests, setPendingRequests] = useState(0);
   const [chatScrollable, setChatScrollable] = useState(false);
-  const [conversationStarted, setConversationStarted] = useState(false);
-  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
-  const [isAmbientIdle, setIsAmbientIdle] = useState(false);
-  const [isPageVisible, setIsPageVisible] = useState(
-    () => document.visibilityState === "visible",
-  );
-  const [isRecordingIntent, setIsRecordingIntent] = useState(false);
   const [isClearingConversation, setIsClearingConversation] = useState(false);
+  const [isAuthed, setIsAuthed] = useState(() => Boolean(getStoredToken()));
   const [isFullResetting, setIsFullResetting] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
-  const [idleCycle, setIdleCycle] = useState(0);
+  const [accountName, setAccountName] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuShift, setMenuShift] = useState(0);
+  const menuRef = useRef(null);
   const [voiceTranscriptReveal, setVoiceTranscriptReveal] = useState(null);
   const audioRef = useRef(null);
   const activeVoiceTranscriptRef = useRef(null);
   const playbackSequenceRef = useRef(0);
   const playbackAnalysisRef = useRef(null);
+  const playbackObjectUrlRef = useRef(null);
   const sessionEpochRef = useRef(0);
   const activeChatRequestsRef = useRef(new Set());
   const clearedSectionsRef = useRef({ conversation: false, memory: false });
   const conversationClearInFlightRef = useRef(false);
   const fullResetInFlightRef = useRef(false);
+
+  const revokePlaybackUrl = () => {
+    if (playbackObjectUrlRef.current) {
+      URL.revokeObjectURL(playbackObjectUrlRef.current);
+      playbackObjectUrlRef.current = null;
+    }
+  };
 
   const finalizeVoiceTranscript = useCallback((playbackToken) => {
     const activeTranscript = activeVoiceTranscriptRef.current;
@@ -310,7 +317,7 @@ function App() {
     }
     stopPlaybackAnalysis();
     releaseAudioElement(audioRef);
-    setIsPlaying(false);
+    revokePlaybackUrl();
     setVoiceOrbActivity((currentActivity) => (
       ["speaking", "thinking"].includes(currentActivity)
         ? "idle"
@@ -330,31 +337,55 @@ function App() {
     : voiceOrbActivity === "speaking"
       ? playbackLevel
       : 0;
-  const isJarvisBusy =
-    hasTypedDraft ||
-    isRecordingIntent ||
-    isListening ||
-    pendingRequests > 0 ||
-    isPlaying ||
-    isClearingConversation ||
-    isFullResetting;
   const isResetControlDisabled =
     isClearingConversation || isFullResetting;
-  const ambientEnabled =
-    initialDataLoaded &&
-    isAmbientIdle &&
-    !isJarvisBusy &&
-    !isOrbHidden &&
-    isPageVisible;
-
+  // Identity comes from the authenticated account (primary), not memory. The
+  // memory-derived name is only a fallback for pre-account sessions.
   const storedName = getStoredUserName(memories);
-  const userName = typeof storedName === "string"
-    ? storedName.trim().replace(/\s+/g, " ").slice(0, 80)
-    : "";
+  const userName = (accountName || storedName || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
 
-  // Restore persisted server state before allowing the idle sound. This avoids
-  // briefly treating an existing conversation as a fresh, empty session.
+  // A 401 from any endpoint means the session is invalid: drop the token and
+  // return to the login screen.
   useEffect(() => {
+    unauthorizedHandler = () => {
+      storeToken("");
+      stopResponsePlayback();
+      setIsAuthed(false);
+      setAccountName("");
+      setMessages([]);
+      setMemories({});
+    };
+    return () => {
+      unauthorizedHandler = null;
+    };
+  }, [stopResponsePlayback]);
+
+  // Restore the account identity on load/refresh (the token persists, but the
+  // name does not). Skipped when a fresh login already supplied the name.
+  useEffect(() => {
+    if (!isAuthed || accountName) return undefined;
+    let cancelled = false;
+    axios
+      .get(`${API_BASE}/auth/me`)
+      .then((res) => {
+        if (!cancelled && res.data?.user?.username) {
+          setAccountName(res.data.user.username);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthed, accountName]);
+
+  // Restore persisted server state once authenticated, so an existing
+  // conversation is not briefly treated as a fresh, empty session. Re-runs when
+  // the token changes (login) or after a full reset (sessionEpoch bump).
+  useEffect(() => {
+    if (!isAuthed) return undefined;
     let cancelled = false;
     const loadEpoch = sessionEpochRef.current;
 
@@ -383,41 +414,34 @@ function App() {
                 : item.type || "text",
           })),
         );
-        setConversationStarted(
-          history.some((item) => item.sender === "You"),
-        );
         setMemories(
           memRes.data?.memories && typeof memRes.data.memories === "object"
             ? memRes.data.memories
             : {},
         );
       } catch (err) {
-        if (!cancelled && loadEpoch === sessionEpochRef.current) {
-          console.error("Failed to load initial assistant data", err);
-        }
-      } finally {
-        if (!cancelled && loadEpoch === sessionEpochRef.current) {
-          setInitialDataLoaded(true);
-        }
-      }
-    };
+         if (!cancelled && loadEpoch === sessionEpochRef.current) {
+           console.error("Failed to load initial assistant data", err);
+         }
+       }
+     };
 
     void fetchInitialData();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAuthed, resetEpoch]);
 
   useEffect(() => () => {
     activeVoiceTranscriptRef.current = null;
     stopPlaybackAnalysis();
     releaseAudioElement(audioRef);
+    revokePlaybackUrl();
   }, [stopPlaybackAnalysis]);
 
-  // Recording becomes Listening only after MediaRecorder has actually
-  // started. A denied permission request therefore returns straight to idle.
+  // Recording starts while Jarvis is speaking: stop the reply so Listening can
+  // take over cleanly.
   const handleRecordingIntentChange = useCallback((recordingIntent) => {
-    setIsRecordingIntent(recordingIntent);
     if (recordingIntent) {
       stopResponsePlayback();
     }
@@ -436,11 +460,9 @@ function App() {
 
   useEffect(() => {
     const handleVisibilityChange = () => {
-      const pageIsVisible = document.visibilityState === "visible";
-      setIsPageVisible(pageIsVisible);
-      if (!pageIsVisible) {
-        // Ambient audio has its own visibility gate. Stop response playback as
-        // well so Jarvis never continues speaking in a background tab.
+      // Stop response playback when the tab is hidden so Jarvis never keeps
+      // speaking in the background.
+      if (document.visibilityState !== "visible") {
         stopResponsePlayback();
       }
     };
@@ -452,39 +474,48 @@ function App() {
   }, [stopResponsePlayback]);
 
   useEffect(() => {
-    setIsAmbientIdle(false);
-
-    if (
-      !initialDataLoaded ||
-      !isPageVisible ||
-      isOrbHidden ||
-      isJarvisBusy
-    ) {
-      return undefined;
-    }
-
-    const idleDelay = conversationStarted
-      ? JARVIS_IDLE_DELAY_MS
-      : INITIAL_IDLE_DELAY_MS;
-    const idleTimer = window.setTimeout(() => {
-      setIsAmbientIdle(true);
-    }, idleDelay);
-
-    return () => window.clearTimeout(idleTimer);
-  }, [
-    conversationStarted,
-    idleCycle,
-    initialDataLoaded,
-    isJarvisBusy,
-    isOrbHidden,
-    isPageVisible,
-  ]);
-
-  useEffect(() => {
     if (messages.length === 0) {
       setChatScrollable(false);
     }
   }, [messages.length]);
+
+  // When the memory sidebar slides in from the right, shift the round menu
+  // button left (within the header) so it clears the panel, keeping the main
+  // content centered. The amount is measured so it stays correct at any width.
+  useEffect(() => {
+    if (!sidebarOpen) {
+      setMenuShift(0);
+      return undefined;
+    }
+    const measure = () => {
+      const panel = document.querySelector(".memory-sidebar");
+      const panelWidth = panel ? panel.getBoundingClientRect().width : 370;
+      const gutter = 16;
+      setMenuShift(panelWidth + gutter);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [sidebarOpen]);
+
+  // Close the header menu on outside click or Escape.
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onPointer = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!isListening) {
@@ -492,11 +523,24 @@ function App() {
     }
   }, [isListening]);
 
+  // Resolve a playable audio URL. Backend paths (/audio/...) are protected,
+  // so fetch them through the authed axios client into a blob; external
+  // http(s) URLs are played directly.
+  const resolveAudioUrl = async (url) => {
+    if (!url) return null;
+    if (url.startsWith("http")) return url;
+    const { data } = await axios.get(`${API_BASE}${url}`, {
+      responseType: "blob",
+    });
+    return URL.createObjectURL(data);
+  };
+
   const playAudio = useCallback(async (url, transcript = null) => {
     if (!url) return;
     let audio = null;
     let settled = false;
     let playbackToken = null;
+    let objectUrl = null;
 
     const finishPlayback = () => {
       if (settled) return;
@@ -508,7 +552,6 @@ function App() {
 
       if (audio && audioRef.current === audio) {
         stopPlaybackAnalysis();
-        setIsPlaying(false);
         setVoiceOrbActivity((currentActivity) => (
           currentActivity === "speaking" || currentActivity === "thinking"
             ? "idle"
@@ -526,12 +569,16 @@ function App() {
         audioRef.current = null;
       } else if (!audioRef.current) {
         stopPlaybackAnalysis();
-        setIsPlaying(false);
         setVoiceOrbActivity((currentActivity) => (
           currentActivity === "speaking" || currentActivity === "thinking"
             ? "idle"
             : currentActivity
         ));
+      }
+
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
       }
     };
 
@@ -540,12 +587,14 @@ function App() {
       playbackToken = playbackSequenceRef.current + 1;
       playbackSequenceRef.current = playbackToken;
 
-      const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
+      // Fetch through the authed client (bearer token) so protected /audio
+      // endpoints do not return 401. Blob URLs are same-origin, so the orb's
+      // playback analyser can still read the JARVIS audio energy.
+      const resolvedUrl = await resolveAudioUrl(url);
+      if (!resolvedUrl) return;
+      objectUrl = resolvedUrl;
       audio = new Audio();
-      // Set this before src so same-origin and configured API-hosted audio can
-      // be analysed without changing native playback when analysis is blocked.
-      audio.crossOrigin = "anonymous";
-      audio.src = fullUrl;
+      audio.src = resolvedUrl;
       audioRef.current = audio;
 
       if (transcript?.messageId && typeof transcript.fullText === "string") {
@@ -574,7 +623,6 @@ function App() {
 
       audio.onplay = () => {
         if (audioRef.current !== audio) return;
-        setIsPlaying(true);
         setVoiceOrbActivity("speaking");
         void startPlaybackAnalysis(audio, playbackToken);
         updateTranscriptProgress();
@@ -609,8 +657,6 @@ function App() {
     }
 
     clearedSectionsRef.current = { conversation: false, memory: false };
-    setConversationStarted(true);
-    setIsAmbientIdle(false);
     stopResponsePlayback();
 
     setMessages((prev) => [
@@ -639,8 +685,6 @@ function App() {
     }
 
     clearedSectionsRef.current = { conversation: false, memory: false };
-    setConversationStarted(true);
-    setIsAmbientIdle(false);
     stopResponsePlayback();
     // A valid voice note has left the recorder and is now being processed.
     // This is deliberately separate from generic text request activity.
@@ -671,7 +715,6 @@ function App() {
       { timeout: CHAT_REQUEST_TIMEOUT_MS },
     );
     activeChatRequestsRef.current.add(request);
-    setPendingRequests((count) => count + 1);
 
     try {
       const response = await request;
@@ -725,7 +768,6 @@ function App() {
       ]);
     } finally {
       activeChatRequestsRef.current.delete(request);
-      setPendingRequests((count) => Math.max(0, count - 1));
     }
   };
 
@@ -737,16 +779,12 @@ function App() {
     stopResponsePlayback();
     setVoiceOrbActivity("idle");
     setIsFullResetting(true);
-    setIsAmbientIdle(false);
-    setInitialDataLoaded(false);
     setMessage("");
     setMessages([]);
     setVoiceTranscriptReveal(null);
     setMemories({});
     setSidebarOpen(false);
-    setConversationStarted(false);
     setChatScrollable(false);
-    setIsRecordingIntent(false);
     setIsClearingConversation(false);
     conversationClearInFlightRef.current = false;
     setIsListening(false);
@@ -767,14 +805,11 @@ function App() {
       // The individual clear operations already succeeded before this
       // coordinator runs. Retaining these flags after a failed final session
       // clear means the next clear action retries the server-side eviction.
-      clearedSectionsRef.current = serverResetSucceeded
-        ? { conversation: false, memory: false }
-        : { conversation: true, memory: true };
-      setPendingRequests(0);
-      setInitialDataLoaded(true);
-      setIsFullResetting(false);
-      setIdleCycle((cycle) => cycle + 1);
-      fullResetInFlightRef.current = false;
+       clearedSectionsRef.current = serverResetSucceeded
+         ? { conversation: false, memory: false }
+         : { conversation: true, memory: true };
+       setIsFullResetting(false);
+       fullResetInFlightRef.current = false;
     }
   };
 
@@ -810,9 +845,7 @@ function App() {
     setIsClearingConversation(true);
     setMessages([]);
     setVoiceTranscriptReveal(null);
-    setConversationStarted(false);
     setChatScrollable(false);
-    setIsAmbientIdle(false);
     let didClearConversation = false;
     try {
       // Each chat request has a finite client timeout. Waiting for those
@@ -827,13 +860,9 @@ function App() {
     } finally {
       conversationClearInFlightRef.current = false;
       setIsClearingConversation(false);
-      // A clear invalidates an in-flight history request, so its local empty
-      // state becomes the new baseline for the idle controller.
-      setInitialDataLoaded(true);
     }
 
     if (didClearConversation) {
-      setIdleCycle((cycle) => cycle + 1);
       await noteClearedSection("conversation");
     }
   };
@@ -859,6 +888,33 @@ function App() {
     }
   };
 
+  const handleLogout = useCallback(async () => {
+    try {
+      await axios.post(`${API_BASE}/auth/logout`);
+    } catch {
+      // Best effort: revoke server-side, but always clear the local session.
+    }
+    storeToken("");
+    stopResponsePlayback();
+    setAccountName("");
+    setMessages([]);
+    setMemories({});
+    setVoiceTranscriptReveal(null);
+    setSidebarOpen(false);
+    setIsAuthed(false);
+  }, [stopResponsePlayback]);
+
+  if (!isAuthed) {
+    return (
+      <AuthScreen
+        onAuthenticated={(name) => {
+          setAccountName(name || "");
+          setIsAuthed(true);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="app-layout">
       <div className="workspace-shell">
@@ -868,30 +924,63 @@ function App() {
             <span>Enterprise Voice Assistant</span>
           </div>
           <div className="workspace-actions">
-            <button
-              type="button"
-              className="workspace-control clear-chat-trigger"
-              onClick={handleClearChat}
-              disabled={isResetControlDisabled}
-              aria-label="Clear conversation"
-              title="Clear conversation"
+            <div
+              className={`workspace-menu${menuOpen ? " open" : ""}${sidebarOpen ? " workspace-menu-shifted" : ""}`}
+              style={{ "--menu-shift-left": `-${menuShift}px` }}
+              ref={menuRef}
             >
-              <Icon name="trash" />
-              <span>Clear conversation</span>
-            </button>
-            <button
-              type="button"
-              className="workspace-control memory-trigger"
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              disabled={isResetControlDisabled}
-              aria-expanded={sidebarOpen}
-              aria-label="Open memory"
-              title="Open memory"
-            >
-              <Icon name="memory" />
-              <span>Memory</span>
-              <b>{Object.keys(memories).length}</b>
-            </button>
+              <button
+                type="button"
+                className="workspace-menu-trigger"
+                onClick={() => setMenuOpen((o) => !o)}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                aria-label="Menu"
+                title="Menu"
+              >
+                <span className="workspace-menu-zipper" aria-hidden="true" />
+                <span className="workspace-menu-runner" aria-hidden="true" />
+              </button>
+              <div className="workspace-menu-panel" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="workspace-menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    handleClearChat();
+                  }}
+                  disabled={isResetControlDisabled}
+                >
+                  <Icon name="trash" size={17} />
+                  <span>Conversation</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="workspace-menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setSidebarOpen(true);
+                  }}
+                >
+                  <Icon name="memory" size={17} />
+                  <span>Memory</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="workspace-menu-item danger"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (window.confirm("Sign out of JARVIS?")) handleLogout();
+                  }}
+                >
+                  <Icon name="logout" size={17} />
+                  <span>Sign out</span>
+                </button>
+              </div>
+            </div>
           </div>
         </header>
 
@@ -901,7 +990,6 @@ function App() {
           <AudioVisualizer
             activity={voiceOrbActivity}
             isVisible={isOrbVisible}
-            isAmbientIdle={ambientEnabled}
             activityLevel={orbActivityLevel}
           />
 
@@ -941,6 +1029,100 @@ function App() {
         onClearMemories={handleClearMemories}
         isClearDisabled={isResetControlDisabled}
       />
+    </div>
+  );
+}
+
+function AuthScreen({ onAuthenticated }) {
+  const [mode, setMode] = useState("login");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const isRegister = mode === "register";
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const route = isRegister ? "/auth/register" : "/auth/login";
+      const { data } = await axios.post(`${API_BASE}${route}`, {
+        username: username.trim(),
+        password,
+      });
+      if (!data?.token) {
+        throw new Error("Login failed.");
+      }
+      storeToken(data.token);
+      onAuthenticated(data.user?.username || username.trim());
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="app-layout auth-layout">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <strong>JARVIS</strong>
+          <span>Enterprise Voice Assistant</span>
+        </div>
+        <h1 className="auth-title">
+          {isRegister ? "Create your account" : "Sign in to continue"}
+        </h1>
+
+        <form className="auth-form" onSubmit={submit}>
+          <label className="auth-field">
+            <span>Username</span>
+            <input
+              type="text"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Enter your name"
+              required
+              disabled={busy}
+            />
+          </label>
+          <label className="auth-field">
+            <span>Password</span>
+            <input
+              type="password"
+              autoComplete={isRegister ? "new-password" : "current-password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              required
+              minLength={isRegister ? 8 : undefined}
+              disabled={busy}
+            />
+          </label>
+
+          {error ? <p className="auth-error" role="alert">{error}</p> : null}
+
+          <button type="submit" className="auth-submit" disabled={busy}>
+            {busy ? "Please wait…" : isRegister ? "Create account" : "Sign in"}
+          </button>
+        </form>
+
+        <button
+          type="button"
+          className="auth-switch"
+          onClick={() => {
+            setMode(isRegister ? "login" : "register");
+            setError("");
+          }}
+          disabled={busy}
+        >
+          {isRegister ? "Already have an account? Sign in" : "New here? Create an account"}
+        </button>
+      </div>
     </div>
   );
 }

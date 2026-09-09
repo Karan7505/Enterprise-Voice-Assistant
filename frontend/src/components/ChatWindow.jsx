@@ -4,10 +4,11 @@ import MessageBubble from "./MessageBubble";
 const OVERFLOW_EPSILON = 2;
 const ORB_RESTORE_BUFFER = 24;
 
-const getGreetingPeriod = (hour) => {
-  if (hour >= 5 && hour < 12) return "morning";
-  if (hour >= 12 && hour < 17) return "afternoon";
-  return "evening";
+// Time-of-day greeting; both words are capitalized at the source.
+const getGreeting = (hour) => {
+  if (hour >= 5 && hour < 12) return "Good Morning";
+  if (hour >= 12 && hour < 17) return "Good Afternoon";
+  return "Good Evening";
 };
 
 function ChatWindow({
@@ -184,7 +185,7 @@ function ChatWindow({
     chatBox.scrollTop = chatBox.scrollHeight;
   }, [revealedMessageId, revealedText]);
 
-  const greeting = `Good ${getGreetingPeriod(localHour)}${userName ? `, ${userName}` : ""}`;
+  const greeting = getGreeting(localHour);
   const userInitial = userName.match(/[\p{L}\p{N}]/u)?.[0]?.toLocaleUpperCase() || "U";
 
   return (
@@ -192,9 +193,17 @@ function ChatWindow({
       {messages.length === 0 ? (
         <div className="empty-chat">
           <div className="empty-hero">
-            <h2 className="time-greeting">{greeting}</h2>
-            <h3>How can I help?</h3>
-            <p>Speak naturally or type a message to begin.</p>
+            <h1 className="time-greeting">
+              {greeting}
+              {userName ? (
+                <>
+                  {" "}
+                  <span className="greeting-name">{userName}</span>
+                </>
+              ) : null}
+            </h1>
+            <h2 className="empty-headline">What&rsquo;s the Mission Today?</h2>
+            <p className="empty-helper">Speak naturally or type a message to begin.</p>
           </div>
         </div>
       ) : (

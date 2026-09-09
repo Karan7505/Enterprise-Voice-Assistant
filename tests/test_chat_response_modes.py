@@ -3,6 +3,8 @@ from unittest.mock import patch
 
 from app.api.chat import ChatRequest, chat
 
+FAKE_USER = {"user_id": 1, "username": "test", "session_id": "user:1"}
+
 
 class ChatResponseModeTests(unittest.TestCase):
     @patch("app.api.chat.get_all_memories", return_value={"name": "Karan"})
@@ -16,6 +18,7 @@ class ChatResponseModeTests(unittest.TestCase):
     ):
         response = chat(
             ChatRequest(message="Hello", response_mode="text"),
+            user=FAKE_USER,
         )
 
         self.assertEqual(
@@ -27,22 +30,25 @@ class ChatResponseModeTests(unittest.TestCase):
             },
         )
         process_message.assert_called_once_with(
-            "Hello", "default", mode="text"
+            "Hello", "user:1", mode="text"
         )
         generate_speech.assert_not_called()
-        get_all_memories.assert_called_once_with("default")
+        get_all_memories.assert_called_once_with("user:1")
 
     @patch("app.api.chat.get_all_memories", return_value={"name": "Karan"})
     @patch("app.api.chat.generate_speech", return_value="reply.mp3")
+    @patch("app.api.chat._record_audio_file")
     @patch("app.api.chat.process_message", return_value="Hello, Karan.")
     def test_voice_mode_generates_tts_with_the_same_memory_flow(
         self,
         process_message,
+        _record_audio,
         generate_speech,
         get_all_memories,
     ):
         response = chat(
             ChatRequest(message="Hello", response_mode="voice"),
+            user=FAKE_USER,
         )
 
         self.assertEqual(
@@ -54,10 +60,11 @@ class ChatResponseModeTests(unittest.TestCase):
             },
         )
         process_message.assert_called_once_with(
-            "Hello", "default", mode="voice"
+            "Hello", "user:1", mode="voice"
         )
         generate_speech.assert_called_once_with("Hello, Karan.")
-        get_all_memories.assert_called_once_with("default")
+        get_all_memories.assert_called_once_with("user:1")
+        _record_audio.assert_called_once_with("reply.mp3", "user:1")
 
 
 if __name__ == "__main__":

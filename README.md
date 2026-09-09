@@ -2,7 +2,7 @@
 
 # Enterprise Voice Assistant
 
-**A voice-first AI assistant with persistent long-term memory, a state-driven JARVIS orb, and a modular business-connector layer (CRM → WhatsApp / Email).**
+**A voice-first AI assistant with persistent long-term memory, per-user accounts, a state-driven Solar-Lava JARVIS orb, and a modular business-connector layer (CRM → WhatsApp / Email).**
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.140-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
@@ -16,104 +16,188 @@
 
 ---
 
-## ✨ What it does
+## ✨ Overview
 
-- **Voice notes, WhatsApp-style.** Press the mic to record. The user's voice renders as an audio-note bubble (play/pause, waveform, duration). The **user's transcript stays internal** — it is never shown in the UI. JARVIS replies are spoken and reveal a **live transcript as it speaks**.
-- **Persistent long-term memory.** The LLM extracts durable facts into SQLite; they survive refreshes and restarts. `/clear-chat` and `/clear-memories` reset them independently.
-- **State-driven orb.** One JARVIS orb with distinct **Idle / Listening / Thinking / Speaking** states, driven by real microphone and playback energy, with a contained liquid-wave interior.
-- **Solar Lava theme.** A warm, molten-orange visual identity applied to the orb and the app accents (see below).
-- **Business connectors.** Ask JARVIS in plain language to send a WhatsApp or email to a named contact. The LLM detects the intent; an **orchestrator** resolves the person via the **CRM connector** and sends via the **WhatsApp** or **Email connector**.
+A production-oriented, multi-provider voice assistant:
+
+- **Accounts & user separation** — built-in login/register. Each user's chat history and long-term memory are isolated server-side via opaque bearer tokens (no client-trusted session ids).
+- **Voice-first UI** — a JARVIS orb with distinct **Idle / Listening / Thinking / Speaking** states driven by *real* microphone and playback energy, with a contained liquid-wave interior and a **Solar Lava** theme.
+- **Natural business actions** — ask in plain language to send a WhatsApp or email to a named contact. The LLM detects the intent; an **orchestrator** resolves the person via a **CRM** connector and sends via the **WhatsApp** or **Email** connector.
+- **Resilient providers** — multi-provider fallbacks for LLM (OpenRouter → NVIDIA → Gemini) and TTS (ElevenLabs → custom → gTTS).
+
+### Screenshots
+
+| Sign in | Main screen |
+|:---:|:---:|
+| <img src="docs/screenshots/login.png" alt="Login screen" width="420"/> | <img src="docs/screenshots/main.png" alt="Main Jarvis screen" width="420"/> |
 
 ---
 
 ## 🏗️ Architecture
 
+### System architecture
+
+```mermaid
+flowchart TB
+  subgraph Client["Browser (React + Vite)"]
+    UI["JARVIS UI / Orb"]
+    REC["MediaRecorder (audio note)"]
+    STT["SpeechRecognition (Web Speech API)"]
+  end
+
+  subgraph Server["FastAPI backend"]
+    AUTH["Auth (register / login / me / logout)"]
+    API["Chat / history / memories / audio"]
+    Svc["session_service"]
+    LLM["LLM: OpenRouter → NVIDIA → Gemini"]
+    TTS["TTS: ElevenLabs → custom → gTTS"]
+    ORCH["Connector Orchestrator"]
+    CRM["CRM connector"]
+    WA["WhatsApp connector (Cloud API)"]
+    EM["Email connector (SMTP)"]
+    DB[("SQLite: users, sessions, messages, memories, audio_files")]
+  end
+
+  UI --> AUTH
+  UI --> API
+  REC --> UI
+  STT --> UI
+  API --> Svc
+  Svc --> LLM
+  Svc --> ORCH
+  Svc --> DB
+  API --> TTS
+  TTS --> API
+  ORCH --> CRM
+  ORCH --> WA
+  ORCH --> EM
+  AUTH --> DB
 ```
-[BROWSER]
-  MediaRecorder        → audio Blob (voice-note bubble only)
-  SpeechRecognition    → transcript (Web Speech API; browser-only)
-        │  { message, response_mode: "voice" | "text" }
-        ▼
-[BACKEND  POST /chat]
-  session_service.process_message
-    ├─ build_prompt(memories, history, message)  + business-action rules
-    ├─ llm_service.generate            LLM: OpenRouter → NVIDIA → Gemini (fallback)
-    │      returns { reply, action?, memories, delete_memories }
-    ├─ if action → orchestrator.run_business_action        [BUSINESS ACTIONS]
-    │       CRM.resolve(recipient)  ──►  WhatsApp.send_text   or  Email.send
-    ├─ persist history (+ mode) and memories → SQLite
-    └─ voice mode → tts_service.generate_speech  TTS: ElevenLabs → OpenAI-compat → gTTS
-        │
-        ▼
-[BROWSER]  renders reply, plays audio, reveals JARVIS live transcript
+
+### Voice / business-action request flow
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant F as Frontend
+  participant B as Backend
+  participant L as LLM
+  participant O as Orchestrator
+  participant C as CRM
+  participant W as WhatsApp / Email
+
+  U->>F: speaks "Send Rahul a WhatsApp: the meeting moved to 4"
+  F->>F: STT (Web Speech API) → transcript (kept internal)
+  F->>B: POST /chat { message, response_mode, Bearer token }
+  B->>B: auth → user session (per-user data scope)
+  B->>L: prompt + memories + history
+  L-->>B: { reply, action{ whatsapp_message, recipient, message } }
+  B->>O: run_business_action(action)
+  O->>C: resolve("Rahul") → phone/email
+  O->>W: send_text(phone, message)   [or email.send]
+  W-->>O: success / clean failure
+  O-->>B: final user-facing result
+  B->>TTS: generate reply audio (voice mode)
+  B-->>F: { reply, audio_url, memories }
+  F->>U: orb Speaking + live transcript + audio
+  Note over F,U: User transcript is never rendered; only JARVIS speaks.
 ```
 
-### STT — Speech-to-Text
-Transcription happens **entirely in the browser** via the **Web Speech API** (`SpeechRecognition`). The backend never decodes audio; it receives the already-transcribed text. The raw `MediaRecorder` audio blob is kept only to render the voice-note bubble and support local replay.
+### Key design rules
+- **Conversation layout** decides where the normal orb is shown (full orb when empty, hidden when the chat is scrollable).
+- **Voice activity** temporarily overrides that layout and drives orb behavior (Listening → Thinking → Speaking → back to normal layout).
+- The user's voice transcript is **internal only** — the UI renders a voice-note bubble, not the words. JARVIS's live transcript is revealed as it speaks.
+- Connector/provider execution lives **behind the orchestrator**, never inside the LLM/prompt path.
 
-### LLM — Language model
-`llm_service.generate()` tries providers in order and stops at the first success: **OpenRouter → NVIDIA NIM → Google Gemini**. Providers request strict JSON (`reply`, optional `action`, `memories`, `delete_memories`); malformed output is logged server-side and returned as a generic "temporarily unavailable" message.
+---
 
-### Orchestrator — business-action routing
-When the LLM emits an `action`, `session_service` hands it to `app/connectors/orchestrator.py`, the **single bridge** between chat and providers. The orchestrator:
-1. validates the action (`whatsapp_message` | `email`),
-2. resolves the recipient (person or group) through the **CRM connector**,
-3. dispatches to the **WhatsApp** or **Email connector**,
-4. returns a clean, provider-neutral result the assistant speaks back.
+## 🔐 Login / Auth & user separation
 
-Provider-specific code never lives in the prompt or the chat endpoint.
+- **Flow:** `POST /auth/register` → account created + token → `GET /auth/me` → protected endpoints with `Authorization: Bearer <token>` → `POST /auth/logout` revokes the token.
+- **Security:** passwords are salted **PBKDF2-HMAC-SHA256** (200k iterations); sessions are opaque, server-stored tokens. No API key is required to use auth.
+- **User separation:** every data endpoint (`/chat`, `/history`, `/memories`, `/clear*`, `/audio`) resolves the token to a user and scopes by a server-derived `session_id` (`user:<id>`). Two users cannot read or clear each other's history or memories (covered by tests).
+- **Multi-admin / multi-deployment:** different admins or deployments simply use different accounts (and their own `.env` keys); isolation is per-account and data is per-`assistant.db`.
 
-```
-"Send Rahul a WhatsApp saying the meeting moved to 4"
-   → LLM: { action: whatsapp_message, recipient: "Rahul", message: "The meeting has moved to 4 PM." }
-   → CRM.resolve("Rahul") → phone +919812345678
-   → WhatsApp.send_text(phone, message)
-   → "I've sent the WhatsApp message."
-```
+---
+
+## 🗂️ Module architecture
+
+| Layer | Location | Responsibility |
+|---|---|---|
+| **Auth** | `app/api/auth.py`, `app/services/auth_service.py` | Register/login/logout/me, password hashing, bearer sessions. |
+| **Chat API** | `app/api/chat.py` | Auth-guarded chat, history, memories, clear, audio, status. |
+| **Session / flow** | `app/services/session_service.py` | Prompt build, LLM call, memory updates, single business-action bridge. |
+| **LLM** | `app/services/llm_service.py` | OpenRouter → NVIDIA → Gemini fallback; strict JSON; generic errors. |
+| **TTS** | `app/services/tts_service.py` | ElevenLabs → custom/OpenAI-compat → gTTS; partial-file cleanup. |
+| **Memory** | `app/services/memory_service.py` | Long-term memory CRUD (per session/user). |
+| **History** | `app/services/database_chat_history.py` | Conversation persistence (+ request mode). |
+| **Connectors** | `app/connectors/*` | `base`, `crm_connector` (directory + REST), `whatsapp_connector`, `email_connector`, `orchestrator`. |
+| **Config** | `app/core/config.py` | Robust env parsing, `.env` precedence, provider detection. |
+| **DB** | `app/core/database.py` | SQLite schema + migrations. |
+| **Frontend** | `frontend/src/*` | Auth screen, orb (`AudioVisualizer`), chat (`ChatWindow`), input + recording + STT (`ChatInput`), bubbles (`MessageBubble`), memory sidebar. |
 
 ### Connectors
-| Connector | Module | Responsibility |
-|---|---|---|
-| **CRM** | `app/connectors/crm_connector.py` | Resolve a person/group by name; return phone, email, and identifiers. Reference in-memory `DirectoryCRM` is replaceable by implementing `BaseCRM`. |
-| **WhatsApp** | `app/connectors/whatsapp_connector.py` | Send text via the **Meta WhatsApp Cloud API** (stdlib `urllib`). |
-| **Email** | `app/connectors/email_connector.py` | Send email via **SMTP** (stdlib `smtplib`) — Gmail, Microsoft/Outlook, or any relay. |
+- **CRM** — `CRM_PROVIDER=directory` (in-memory `CRM_CONTACTS` JSON) **or** `CRM_PROVIDER=rest` (a real CRM over HTTP, configured entirely by env vars). Field mapping uses configurable names plus common aliases (`name/full_name`, `phone/mobile`, `email/email_address`), so most CRMs work by setting base URL + key + endpoint only.
+- **WhatsApp** — Meta **Cloud API** via stdlib `urllib` (no browser automation).
+- **Email** — any **SMTP** provider (Gmail, Microsoft/Outlook, relay) via stdlib `smtplib`.
 
-All connectors return an `ActionResult` (`success` + a user-facing message) so failures are reported cleanly instead of leaking raw provider errors.
+> **Unresolved decision (reported, not assumed):** which specific external CRM product to bind is a business choice. The code is provider-agnostic and **API-ready for `CRM_PROVIDER=rest`** — supply the endpoint + credentials + (if non-standard) field mappings in `.env`. No further code change is needed for a standard REST contact-search API.
 
 ---
 
-## 🎨 Solar Lava theme
+## 🚀 Setup & run
 
-The JARVIS orb and the surrounding UI share one molten identity:
-
-| Role | Hex |
+### Prerequisites
+| Requirement | Version |
 |---|---|
-| Main molten body | `#FF8B2B` |
-| Bright highlight | `#FFA73B` |
-| Hot orange | `#FF6A1C` |
-| Bright red accent | `#FC1304` |
-| Deep red edge | `#D90206` |
+| Python | 3.11+ |
+| Node.js | 18+ |
+| LLM API key | at least one of OpenRouter / NVIDIA / Gemini |
+| Browser | Chrome or Edge for voice (Web Speech API) |
 
-- The **orb** builds depth from these together — molten body, luminous highlights, restrained red-hot edge — with a contained **liquid-wave** interior that reacts to mic/playback energy.
-- The **app accents** (buttons, focus rings, active/hover states, borders, indicators, icons, shadows) derive from the same palette, defined as CSS variables in `frontend/src/index.css`.
-- Surfaces stay neutral ivory and text stays high-contrast; state changes come from motion and intensity, not from unrelated color swaps.
+```bash
+# 1. Clone
+git clone https://github.com/Karan7505/Enterprise-Voice-Assistant.git
+cd Enterprise-Voice-Assistant
+
+# 2. Configure
+cp .env.example .env          # Windows:  copy .env.example .env
+#    → add at least one LLM key (+ optional TTS / connector keys)
+
+# 3. Backend
+python -m venv venv
+.\venv\Scripts\activate       # Windows   (macOS/Linux: source venv/bin/activate)
+pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --port 8000
+
+# 4. Frontend (new terminal)
+cd frontend
+npm install
+npm run dev
+```
+
+- API: **http://localhost:8000** (docs at `/docs`)
+- UI: **http://localhost:5173**
+- First use: create an account on the sign-in screen (or `POST /auth/register`).
+
+The frontend talks to `http://localhost:8000` in development via `frontend/.env.development`. For a separate deployment, set `VITE_API_BASE_URL` at build time and `FRONTEND_URL` + `CORS_ORIGINS` on the backend; leave both empty/origin-matched when a reverse proxy serves them from one origin.
 
 ---
 
-## 📡 Environment variables
+## 🔑 Environment variables
 
-Copy `.env.example` → `.env`. In local development the root `.env` is authoritative (it overrides inherited shell values on each backend start); a deployment without a root `.env` uses its platform environment.
+Copy `.env.example` → `.env`. In local development the root `.env` is authoritative (it overrides inherited shell values on each start); a deployment without a root `.env` uses its platform environment.
 
 ### Deployment / frontend origin
 | Variable | Purpose | Default |
 |---|---|---|
-| `FRONTEND_URL` | Deployed frontend origin; also the OpenRouter referer | `http://localhost:5173` |
+| `FRONTEND_URL` | Deployed frontend origin (also the OpenRouter referer) | `http://localhost:5173` |
 | `CORS_ORIGINS` | Comma-separated CORS allowlist | `FRONTEND_URL` |
 
 ### Runtime limits
 | Variable | Purpose | Default |
 |---|---|---|
-| `MAX_HISTORY_MESSAGES` | How many recent messages go to the LLM (`0` = all) | `10` |
+| `MAX_HISTORY_MESSAGES` | Recent messages sent to the LLM (`0` = all) | `10` |
 | `AUDIO_MAX_AGE_SECONDS` | Age before generated `.mp3` files are cleaned | `3600` |
 
 ### LLM (provide at least one)
@@ -141,25 +225,32 @@ Copy `.env.example` → `.env`. In local development the root `.env` is authorit
 | `TTS_MODEL` | Custom TTS model | `gpt-4o-mini-tts` |
 | `TTS_VOICE` | Custom TTS voice | `ash` |
 | `TTS_SPEED` | 0.25–4.0 | `1.0` |
-| `TTS_INSTRUCTIONS` | Voice instructions (sent only to `gpt-4o-mini-tts*`) | JARVIS delivery profile |
+| `TTS_INSTRUCTIONS` | Voice profile (sent only to `gpt-4o-mini-tts*`) | JARVIS delivery profile |
 | *(no key)* | gTTS fallback (provider 3) — always tried last | — |
 
 ### Connectors (all optional)
 | Variable | Purpose |
 |---|---|
-| `CRM_PROVIDER` | CRM provider name (`directory` = reference in-memory CRM) |
-| `CRM_CONTACTS` | JSON array of contacts (see format below) |
+| `CRM_PROVIDER` | `directory` (default) or `rest` |
+| `CRM_CONTACTS` | JSON array of contacts (directory provider) |
+| `CRM_REST_BASE_URL` | REST CRM base URL |
+| `CRM_REST_API_KEY` | REST CRM API key |
+| `CRM_REST_AUTH_HEADER` | Auth header name (default `Authorization`) |
+| `CRM_REST_AUTH_SCHEME` | Auth scheme (default `Bearer`) |
+| `CRM_REST_SEARCH_PATH` | Contact-search path (default `/contacts/search`) |
+| `CRM_REST_QUERY_PARAM` | Query param name (default `q`) |
+| `CRM_REST_RESULTS_KEY` | JSON key holding the result list (default `results`) |
+| `CRM_REST_TIMEOUT` | Request timeout seconds (default `10`) |
+| `CRM_REST_NAME_FIELD` / `CRM_REST_PHONE_FIELD` / `CRM_REST_EMAIL_FIELD` | Field names (with common alias fallbacks) |
 | `WA_TOKEN` | WhatsApp Cloud API permanent token |
 | `WA_PHONE_NUMBER_ID` | WhatsApp Business phone-number ID |
 | `WA_GRAPH_VERSION` | Graph API version (default `v19.0`) |
 | `EMAIL_HOST` | SMTP server (e.g. `smtp.gmail.com`, `smtp.office365.com`) |
 | `EMAIL_PORT` | SMTP port (default `587`) |
-| `EMAIL_USERNAME` | SMTP username / from address |
-| `EMAIL_PASSWORD` | SMTP password / app password |
+| `EMAIL_USERNAME` / `EMAIL_PASSWORD` | SMTP credentials (use an app password for Gmail/Microsoft 2FA) |
 | `EMAIL_USE_TLS` | `true` = STARTTLS (default) |
 
-#### `CRM_CONTACTS` format
-A single-line JSON array. A **person** carries `phone` and/or `email`; a **group** carries `kind: "group"` and a `members` array (email addresses, or phone numbers for WhatsApp fan-out).
+`CRM_CONTACTS` (directory) example — people carry `phone`/`email`; groups carry `kind: "group"` + `members`:
 
 ```json
 [
@@ -169,59 +260,7 @@ A single-line JSON array. A **person** carries `phone` and/or `email`; a **group
 ]
 ```
 
----
-
-## 🚀 Setup & run
-
-### Prerequisites
-| Requirement | Version |
-|---|---|
-| Python | 3.11+ |
-| Node.js | 18+ |
-| LLM API key | at least one of OpenRouter / NVIDIA / Gemini |
-| TTS key | optional (gTTS is the no-key fallback) |
-| Browser | Chrome or Edge for voice (Web Speech API) |
-
-```bash
-# 1. Clone
-git clone https://github.com/Karan7505/Enterprise-Voice-Assistant.git
-cd Enterprise-Voice-Assistant
-
-# 2. Configure
-cp .env.example .env     # Windows:  copy .env.example .env
-#    → edit .env: set at least one LLM key (and optional TTS + connector keys)
-
-# 3. Backend
-python -m venv venv
-.\venv\Scripts\activate   # Windows   (macOS/Linux: source venv/bin/activate)
-pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --port 8000
-
-# 4. Frontend (new terminal)
-cd frontend
-npm install
-npm run dev
-```
-
-- API: **http://localhost:8000** (docs at `/docs`)
-- UI: **http://localhost:5173**
-
-The frontend talks to `http://localhost:8000` automatically in development via `frontend/.env.development`. For a separate deployment, set `VITE_API_BASE_URL` at build time; leave it empty when a reverse proxy serves both from one origin.
-
----
-
-## 🧪 Tests
-
-```bash
-# Backend (run from the repo root, with the venv)
-python -m unittest discover -s tests
-
-# Frontend (from frontend/)
-npm run lint
-npm run build
-```
-
-Backend suite (`tests/`): `test_config_loading.py`, `test_chat_response_modes.py`, `test_tts_service.py`, `test_connectors.py` (CRM → WhatsApp / Email routing and failure states, using mocks — no live calls).
+> Authentication needs **no env key** — accounts are created through the UI or the API. Provider/connector credentials are loaded from `.env` (in `.gitignore`), never hard-coded, and never sent to the frontend.
 
 ---
 
@@ -232,15 +271,17 @@ Enterprise-Voice-Assistant/
 ├── app/
 │   ├── main.py                          # FastAPI app, CORS, lifespan (DB + audio init)
 │   ├── api/
-│   │   └── chat.py                      # /chat /memories /history /clear* /status /audio
+│   │   ├── auth.py                      # /auth/* + require_user dependency
+│   │   └── chat.py                      # auth-guarded chat/history/memories/audio/status
 │   ├── core/
 │   │   ├── config.py                    # env loading + settings (LLM, TTS, connectors)
-│   │   └── database.py                  # SQLite schema init + migrations
+│   │   └── database.py                  # SQLite schema + migrations (incl. users/sessions)
 │   ├── models/
 │   │   └── chat_message.py              # ChatMessage (role, content, mode)
 │   ├── prompts/
 │   │   └── chat_prompt.py               # memory-aware prompt + business-action rules
 │   ├── services/
+│   │   ├── auth_service.py              # PBKDF2 + bearer sessions
 │   │   ├── llm_service.py               # OpenRouter → NVIDIA → Gemini fallback
 │   │   ├── tts_service.py               # ElevenLabs → OpenAI-compat → gTTS + cleanup
 │   │   ├── session_service.py           # message flow, memory updates, action bridge
@@ -249,14 +290,14 @@ Enterprise-Voice-Assistant/
 │   │   └── context_builder.py           # loads memory context at session start
 │   └── connectors/
 │       ├── base.py                      # ActionResult / ActionCode
-│       ├── crm_connector.py             # contact + group lookup (BaseCRM, DirectoryCRM)
+│       ├── crm_connector.py             # BaseCRM, DirectoryCRM, RestCRM
 │       ├── whatsapp_connector.py        # WhatsApp Cloud API sender
 │       ├── email_connector.py           # SMTP sender
 │       └── orchestrator.py              # CRM → connector routing (single entry point)
 ├── frontend/
 │   └── src/
-│       ├── App.jsx                      # state, API calls, audio playback, reset logic
-│       ├── App.css / index.css          # Solar Lava theme, orb + layout styles
+│       ├── App.jsx                      # auth screen, state, API, audio playback, reset
+│       ├── App.css / index.css          # Solar Lava + gel theme, orb + layout styles
 │       └── components/
 │           ├── AudioVisualizer.jsx      # JARVIS orb (idle/listen/think/speak + waves)
 │           ├── ChatWindow.jsx           # scrollable message list + orb layout
@@ -265,50 +306,73 @@ Enterprise-Voice-Assistant/
 │           ├── MemorySidebar.jsx        # memory drawer (search, clear, reset)
 │           └── Icon.jsx                 # thin-line SVG icon set
 ├── tests/                               # backend unittest suite
+├── docs/screenshots/                    # README screenshots
 ├── .env.example                         # full env template (copy → .env)
 └── requirements.txt                     # Python dependencies
 ```
 
 ---
 
-## 📄 API
+## 📡 API
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/chat` | Send a message → reply, optional `audio_url`, updated `memories`. `response_mode`: `"text"` or `"voice"`. |
-| `GET` | `/memories` | Stored long-term memories for the session. |
-| `GET` | `/history` | Conversation history (each message includes its `mode`). |
-| `POST` | `/clear-chat` | Clear history, keep memories. |
-| `POST` | `/clear-memories` | Clear memories, keep history. |
-| `POST` | `/clear` | Wipe history + memories. |
-| `GET` | `/status` | Health + active LLM/TTS providers and configured connectors. |
-| `GET` | `/audio/{filename}` | Stream a generated TTS file. |
+| Method | Endpoint | Auth | Description |
+|---|---|:---:|---|
+| `POST` | `/auth/register` | — | Create account → `{ token, user }`. |
+| `POST` | `/auth/login` | — | Log in → `{ token, user }`. |
+| `GET` | `/auth/me` | ✔ | Current user. |
+| `POST` | `/auth/logout` | ✔ | Revoke the session token. |
+| `POST` | `/chat` | ✔ | Send message → reply, optional `audio_url`, updated `memories`. `response_mode`: `text`/`voice`. |
+| `GET` | `/history` | ✔ | The user's conversation history (each message includes `mode`). |
+| `GET` | `/memories` | ✔ | The user's long-term memories. |
+| `POST` | `/clear-chat` | ✔ | Clear history, keep memories. |
+| `POST` | `/clear-memories` | ✔ | Clear memories, keep history. |
+| `POST` | `/clear` | ✔ | Wipe the user's history + memories. |
+| `GET` | `/status` | — | Health + active LLM/TTS providers and configured connectors. |
+| `GET` | `/audio/{filename}` | ✔ | Stream a generated TTS file (owned by the user). |
 
 ---
 
-## ⚠️ Known limitations
+## 🧪 Tests
 
-- **STT is browser-only.** Transcription uses the Web Speech API, so voice input works best in **Chrome/Edge**; **Firefox has no Web Speech API** (text only). The backend never transcribes audio.
-- **Connectors are optional and not live until configured.** Without `WA_TOKEN`/`WA_PHONE_NUMBER_ID` or SMTP credentials (and a populated `CRM_CONTACTS`), business actions return a clean "not configured" result instead of failing. No live send has been performed without real credentials.
-- **CRM is a reference in-memory directory.** `DirectoryCRM` reads `CRM_CONTACTS` from config. It is a placeholder for a real CRM; connect one by implementing `BaseCRM` (no core changes needed).
-- **WhatsApp uses the Meta Cloud API.** The number in `WA_PHONE_NUMBER_ID` must be a WhatsApp Business/Cloud-API number; outbound text requires an approved template in some cases.
-- **Email requires valid SMTP credentials.** Gmail/Microsoft with 2FA need an **app password**, not the account password.
-- **Replayed voice notes are in-memory only.** After a reload, reloaded voice messages render as voice-note bubbles but the original recorded audio is not persisted (playback is a no-op); the transcript stays internal either way.
-- **SQLite.** Fine for single-user/small team. Migrate to PostgreSQL for multi-user production.
-- **Business actions are not stored as send logs** — only the chat exchange is persisted.
+```bash
+# Backend (repo root, with the venv)
+python -m unittest discover -s tests
+
+# Frontend (frontend/)
+npm run lint
+npm run build
+```
+
+Backend suite (`tests/`): `test_auth.py` (register/login/logout, wrong password, **two-user data isolation**), `test_crm_rest.py` (REST CRM mapping, auth header, provider selection), `test_connectors.py` (CRM → WhatsApp / Email routing + failure states, mocked), `test_chat_response_modes.py`, `test_config_loading.py`, `test_tts_service.py`.
+
+---
+
+## ✅ Verification status
+
+The project is verified **locally** to the extent possible without real third-party credentials. It is intentionally separated below so nothing is claimed that hasn't been run.
+
+### Locally verified and working
+- **Auth & user separation** — register/login/logout/me, wrong-password rejection, token revocation, and per-user history/memory isolation (unit tests + live local HTTP smoke of all `/auth` and guarded endpoints).
+- **Memory & chat/history** — persistence, reload, clear-chat / clear-memories / full reset (unit tests + code paths exercised locally).
+- **TTS fallback logic** — provider chain and partial-file cleanup verified with mocked providers (gTTS path is live-capable with no key; paid providers are exercised only as configured fallbacks in tests).
+- **CRM abstraction & routing** — directory + REST providers, orchestrator CRM → WhatsApp/Email routing, and all failure states (mocked HTTP; no live CRM/WhatsApp/Email calls).
+- **WhatsApp / Email connector logic** — request building, auth headers, response handling, and clean failure results (mocked; no live sends).
+- **Frontend** — `npm run lint` and `npm run build` pass; UI (login screen, main screen, orb states, voice-note rendering, progressive transcript) reviewed against source and captured in the screenshots above.
+- **Voice input (STT)** — uses the browser Web Speech API; code path verified, runtime behavior is browser-dependent (best in Chrome/Edge).
+
+### Implemented but awaiting live API-key / production verification
+- **LLM** — OpenRouter / NVIDIA / Gemini (needs a real key to serve real replies).
+- **TTS** — ElevenLabs and custom/OpenAI-compatible (needs a real key; gTTS works with no key).
+- **WhatsApp** — Meta Cloud API (needs `WA_TOKEN` + `WA_PHONE_NUMBER_ID` and a Business/Cloud-API number; template approval may be required).
+- **Email** — SMTP (needs valid SMTP credentials; app password for Gmail/Microsoft 2FA).
+- **CRM (rest)** — needs the chosen CRM's base URL + credentials (the **CRM product choice itself is the one unresolved decision**; see above).
+
+**Bottom line:** after local verification, the only remaining steps to go live are **adding real credentials/config to `.env`** and **running live production tests** — **no code changes** are required for the LLM, TTS, auth, memory, history, or any standard REST/Cloud-API/SMTP connector.
 
 ---
 
 ## 🔒 Security notes
-
-- API keys and connector credentials load **only** from `.env` (in `.gitignore`) — never hardcoded, never sent to the frontend.
-- Provider errors are logged server-side; the user receives generic, provider-neutral messages.
-- Generated audio lives in the gitignored `audio/` directory; partial files are removed on provider failure and stale files are cleaned by `AUDIO_MAX_AGE_SECONDS`.
-
----
-
-<div align="center">
-
-Built with **multi-provider LLM/TTS fallbacks** · **FastAPI** · **React** · **SQLite** · **Solar Lava**
-
-</div>
+- Credentials load **only** from `.env` (gitignored) — never hard-coded, never exposed to the frontend.
+- Passwords are salted PBKDF2; sessions are opaque server-stored tokens; logout revokes them.
+- Provider errors are logged server-side; users get generic, provider-neutral messages.
+- Data is scoped per authenticated user; `/audio` is ownership-checked.

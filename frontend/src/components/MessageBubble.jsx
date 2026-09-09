@@ -15,12 +15,10 @@ function MessageBubble({
 }) {
   const isUser = sender === "You";
   const isSystem = sender === "System";
-  const [copyStatus, setCopyStatus] = useState("idle");
   const [vnPlaying, setVnPlaying] = useState(false);
   const [vnProgress, setVnProgress] = useState(0);
   const vnAudioRef = useRef(null);
   const vnObjectUrlRef = useRef(null);
-  const copyTimerRef = useRef(null);
 
   const isVoiceNote = type === "audio" && isUser;
   const displaySender = !isUser && !isSystem ? "JARVIS" : sender;
@@ -45,24 +43,8 @@ function MessageBubble({
   }, []);
 
   useEffect(() => () => {
-    clearTimeout(copyTimerRef.current);
     disposeVoiceAudio();
   }, [disposeVoiceAudio]);
-
-  const handleCopy = async () => {
-    clearTimeout(copyTimerRef.current);
-    try {
-      if (!navigator.clipboard) {
-        throw new Error("Clipboard API unavailable");
-      }
-      await navigator.clipboard.writeText(text);
-      setCopyStatus("copied");
-    } catch (error) {
-      console.error("Clipboard copy failed:", error);
-      setCopyStatus("error");
-    }
-    copyTimerRef.current = setTimeout(() => setCopyStatus("idle"), 2000);
-  };
 
   const formatDuration = (seconds) => {
     if (!seconds || seconds <= 0) return "0:00";
@@ -177,10 +159,10 @@ function MessageBubble({
         </div>
       ) : (
         <div className={`message-bubble ${isUser ? "user-message" : isSystem ? "system-message" : "ai-message"}${responseMode === "voice" && !isUser && !isSystem ? " voice-response" : ""}`}>
-          <div className="message-header">
-            <span className="sender-name">{displaySender}</span>
-            <div className="message-actions">
-              {!isUser && responseMode === "voice" && audioUrl && (
+          {(!isUser && responseMode === "voice" && audioUrl) && (
+            <div className="message-header">
+              <span className="sender-name">{displaySender}</span>
+              <div className="message-actions">
                 <button
                   type="button"
                   className="action-icon-btn"
@@ -190,21 +172,9 @@ function MessageBubble({
                 >
                   <Icon name="volume" size={16} />
                 </button>
-              )}
-              <button
-                type="button"
-                className="action-icon-btn"
-                onClick={handleCopy}
-                title={copyStatus === "copied" ? "Copied" : copyStatus === "error" ? "Copy failed" : "Copy text"}
-                aria-label={copyStatus === "copied" ? "Text copied" : copyStatus === "error" ? "Could not copy text" : "Copy text"}
-              >
-                <Icon
-                  name={copyStatus === "copied" ? "check" : copyStatus === "error" ? "alert" : "copy"}
-                  size={16}
-                />
-              </button>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="message-text">{displayText}</div>
         </div>

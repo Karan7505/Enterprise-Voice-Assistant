@@ -12,6 +12,8 @@ const paths = {
   play: <path d="m8 5 11 7-11 7z"/>,
   pause: <><path d="M9 5v14M15 5v14"/></>,
   search: <><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></>,
+  logout: <><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></>,
+  chevron: <path d="m6 9 6 6 6-6"/>,
 };
 
 function Icon({ name, size = 18, className = "" }) {

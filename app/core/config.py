@@ -196,10 +196,26 @@ class Settings:
     )
 
     # --- Connectors (modular business-system layer) ---
-    # CRM: a reference directory loaded from a JSON array in the environment.
-    # Swap for a live CRM provider by overriding get_crm(); no core changes.
+    # CRM: "directory" (in-memory JSON) or "rest" (a real CRM over HTTP).
+    # Swap providers via CRM_PROVIDER only; JARVIS core logic is unaffected.
     CRM_PROVIDER: str = clean_str(os.getenv("CRM_PROVIDER"), "directory")
     CRM_CONTACTS: str = clean_str(os.getenv("CRM_CONTACTS"))
+
+    # REST CRM provider (used when CRM_PROVIDER=rest). Fully driven by env
+    # config so a specific CRM (Salesforce, HubSpot, a custom API, ...) can be
+    # wired up without code edits. The response items are mapped via the field
+    # aliases below, so common naming conventions are supported out of the box.
+    CRM_REST_BASE_URL: str = clean_str(os.getenv("CRM_REST_BASE_URL")).rstrip("/")
+    CRM_REST_API_KEY: str = clean_str(os.getenv("CRM_REST_API_KEY"))
+    CRM_REST_AUTH_HEADER: str = clean_str(os.getenv("CRM_REST_AUTH_HEADER"), "Authorization")
+    CRM_REST_AUTH_SCHEME: str = clean_str(os.getenv("CRM_REST_AUTH_SCHEME"), "Bearer")
+    CRM_REST_SEARCH_PATH: str = clean_str(os.getenv("CRM_REST_SEARCH_PATH"), "/contacts/search")
+    CRM_REST_QUERY_PARAM: str = clean_str(os.getenv("CRM_REST_QUERY_PARAM"), "q")
+    CRM_REST_RESULTS_KEY: str = clean_str(os.getenv("CRM_REST_RESULTS_KEY"), "results")
+    CRM_REST_TIMEOUT: float = clean_float(os.getenv("CRM_REST_TIMEOUT"), default=10.0, minimum=1.0)
+    CRM_REST_NAME_FIELD: str = clean_str(os.getenv("CRM_REST_NAME_FIELD"), "name")
+    CRM_REST_PHONE_FIELD: str = clean_str(os.getenv("CRM_REST_PHONE_FIELD"), "phone")
+    CRM_REST_EMAIL_FIELD: str = clean_str(os.getenv("CRM_REST_EMAIL_FIELD"), "email")
 
     # WhatsApp Business (Meta Cloud API). Never expose to the frontend.
     WA_TOKEN: str = clean_str(os.getenv("WA_TOKEN"))
