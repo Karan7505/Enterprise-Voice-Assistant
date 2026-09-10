@@ -4,7 +4,12 @@ from unittest.mock import MagicMock
 from app.connectors import orchestrator
 from app.connectors.base import ActionCode, ActionResult
 from app.connectors.crm_connector import Contact
-from app.connectors.orchestrator import BusinessAction, execute_action, run_business_action
+from app.connectors.orchestrator import (
+    BusinessAction,
+    execute_action,
+    is_ambiguous_recipient,
+    run_business_action,
+)
 
 
 class _StubCRM:
@@ -61,6 +66,25 @@ class BusinessActionParsingTests(unittest.TestCase):
 
     def test_run_business_action_without_action_returns_reply_unchanged(self):
         self.assertEqual(run_business_action("Hello", None), "Hello")
+
+    def test_vague_recipient_is_never_treated_as_a_contact_name(self):
+        self.assertTrue(is_ambiguous_recipient("one of my friends"))
+        self.assertTrue(is_ambiguous_recipient("someone"))
+        self.assertFalse(is_ambiguous_recipient("Rahul"))
+
+    def test_vague_recipient_requests_clarification_without_crm_lookup(self):
+        with unittest.mock.patch.object(orchestrator, "get_crm") as get_crm:
+            result = execute_action(
+                BusinessAction(
+                    action="whatsapp_message",
+                    recipient="one of my friends",
+                    message="See you soon",
+                )
+            )
+        self.assertFalse(result.success)
+        self.assertEqual(result.code, ActionCode.MISSING_FIELDS)
+        self.assertIn("Which person", result.message)
+        get_crm.assert_not_called()
 
 
 class WhatsAppWorkflowTests(unittest.TestCase):

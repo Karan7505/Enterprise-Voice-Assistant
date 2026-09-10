@@ -16,6 +16,7 @@ other chat/voice/memory/TTS code changes.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,6 +31,24 @@ logger = logging.getLogger(__name__)
 SUPPORTED_ACTIONS = {"whatsapp_message", "email"}
 # Connectors that need a recipient resolved from the CRM.
 _RECIPIENT_ACTIONS = {"whatsapp_message", "email"}
+
+# These phrases describe an unresolved relationship or an unknown person.
+# They must never be passed to CRM resolution as if they were literal names;
+# the assistant needs to ask who the user means first.
+_AMBIGUOUS_RECIPIENT_PATTERNS = (
+    re.compile(r"^one of my\s+", re.IGNORECASE),
+    re.compile(r"^(?:a|one of my|one of the)\s+(?:friends?|colleagues?|contacts?)$", re.IGNORECASE),
+    re.compile(r"^(?:someone|somebody|anyone|anybody)$", re.IGNORECASE),
+    re.compile(r"^(?:my\s+)?(?:friend|colleague|contact|boss|manager)$", re.IGNORECASE),
+    re.compile(r"^(?:that|this)\s+(?:person|friend|colleague|contact)$", re.IGNORECASE),
+    re.compile(r"^(?:him|her|them|that person|the person)$", re.IGNORECASE),
+)
+
+
+def is_ambiguous_recipient(value: str | None) -> bool:
+    """Return whether a recipient is a vague reference rather than an identity."""
+    normalized = " ".join(str(value or "").split())
+    return bool(normalized) and any(pattern.fullmatch(normalized) for pattern in _AMBIGUOUS_RECIPIENT_PATTERNS)
 
 
 @dataclass
@@ -97,6 +116,12 @@ def execute_action(business: BusinessAction) -> ActionResult:
             return ActionResult.failure(
                 ActionCode.MISSING_FIELDS,
                 "Who should I send this to? Could you give me a name?",
+            )
+
+        if is_ambiguous_recipient(business.recipient):
+            return ActionResult.failure(
+                ActionCode.MISSING_FIELDS,
+                "Which person or group do you mean? Please give me their name.",
             )
 
         contact = get_crm().resolve(business.recipient)

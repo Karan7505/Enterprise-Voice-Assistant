@@ -27,9 +27,21 @@ A production-oriented, multi-provider voice assistant:
 
 ### Screenshots
 
-| Sign in | Main screen |
+| Sign in | Empty workspace |
 |:---:|:---:|
-| <img src="docs/screenshots/login.png" alt="Login screen" width="420"/> | <img src="docs/screenshots/main.png" alt="Main Jarvis screen" width="420"/> |
+| <img src="docs/screenshots/sign-in.png" alt="Sign-in screen" width="420"/> | <img src="docs/screenshots/home.png" alt="Empty Jarvis workspace" width="420"/> |
+
+| Main conversation | Account menu |
+|:---:|:---:|
+| <img src="docs/screenshots/main-chat.png" alt="Main Jarvis conversation" width="420"/> | <img src="docs/screenshots/menu.png" alt="Account menu" width="420"/> |
+
+| Memory panel open | Voice response (speaking) |
+|:---:|:---:|
+| <img src="docs/screenshots/memory-panel.png" alt="Memory panel open with saved details" width="420"/> | <img src="docs/screenshots/voice-speaking.png" alt="Voice response — JARVIS speaking with live transcript and replay control" width="420"/> |
+
+| Mobile layout |
+|:---:|
+| <img src="docs/screenshots/mobile-chat.png" alt="Mobile layout" width="420"/> |
 
 ---
 
@@ -100,7 +112,7 @@ sequenceDiagram
   B->>TTS: generate reply audio (voice mode)
   B-->>F: { reply, audio_url, memories }
   F->>U: orb Speaking + live transcript + audio
-  Note over F,U: User transcript is never rendered; only JARVIS speaks.
+  Note over F,U: User transcript is never rendered#59; only JARVIS speaks.
 ```
 
 ### Key design rules

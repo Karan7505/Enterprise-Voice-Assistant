@@ -146,11 +146,14 @@
   flex: 0 0 auto;
 }
 
+/* Fixed height (not min-height) so the row's vertical rhythm — and therefore
+   the menu button's position — is identical on every viewport, including
+   when a native login/permission popup or window resize changes the size. */
 .workspace-header {
   position: relative;
   z-index: 20;
   display: flex;
-  min-height: 72px;
+  height: 72px;
   flex: 0 0 auto;
   align-items: center;
   padding: 0 24px;
@@ -159,13 +162,24 @@
   backdrop-filter: blur(16px) saturate(1.15);
 }
 
+/* Centered, absolutely positioned title. max-width + ellipsis so it can
+   never grow wide enough to push the actions (and the menu button) — the
+   button's right anchor is guaranteed to stay at the header's edge. */
 .workspace-title {
   position: absolute;
   left: 50%;
+  max-width: calc(100% - 240px);
   display: grid;
   gap: 4px;
   text-align: center;
   transform: translateX(-50%);
+}
+
+.workspace-title strong,
+.workspace-title span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .workspace-title strong {
@@ -182,17 +196,22 @@
   font-weight: 400;
 }
 
+/* flex-shrink:0 on the actions + menu wrapper guarantees the button can
+   never be squeezed/compressed by the flex row, so its right-edge anchor
+   holds on any viewport or popup-induced resize. */
 .workspace-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-left: auto;
+  flex: 0 0 auto;
 }
 
 /* Single round menu button. `--menu-shift-left` is set from JS to move the
    button left (clearing the sidebar) while it stays within the header. */
 .workspace-menu {
   position: relative;
+  flex: 0 0 auto;
   transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -200,132 +219,86 @@
   transform: translateX(var(--menu-shift-left, 0));
 }
 
-/* Top-right menu: a premium Solar-Lava vertical capsule. A zipper-style
-   runner travels top-to-bottom as the menu opens and bottom-to-top as it
-   closes. The button is intentionally stable on hover (no hover effect). */
+/* Top-right menu: a perfectly circular sparkles button (design source of
+   truth). Static while idle — no hover effect, no idle glow, no motion.
+   The symbol uses the app's exact --orange so its shade matches the rest
+   of the Solar Lava system. The only state change is a soft luminous ring
+   that appears while the menu is open and fades out when it closes. */
 .workspace-menu-trigger {
   position: relative;
-  display: inline-grid;
-  width: 40px;
-  height: 62px;
+  width: 44px;
+  height: 44px;
+  display: grid;
   place-items: center;
-  overflow: hidden;
-  border: 0;
-  border-radius: 999px;
-  background: linear-gradient(
-    180deg,
-    var(--orange-glow) 0%,
-    var(--orange) 42%,
-    var(--orange-strong) 100%
-  );
-  box-shadow:
-    var(--shadow-accent),
-    inset 0 1px 0 rgba(255, 224, 190, 0.5),
-    inset 0 -1px 0 rgba(217, 2, 6, 0.28);
+  border: 1px solid var(--line);
+  background: var(--gel-surface-soft);
+  backdrop-filter: blur(14px);
+  border-radius: 50%;
+  box-shadow: var(--gel-shadow-sm);
   cursor: pointer;
 }
 
 .workspace-menu-trigger:focus-visible {
   outline: none;
   box-shadow:
-    var(--shadow-accent),
+    var(--gel-shadow-sm),
     0 0 0 4px rgba(255, 106, 28, 0.18);
 }
 
-/* Zipper housing: an invisible full-height strip. At rest the capsule is
-   completely clean and flat — no line, dot, runner, or teeth. Everything
-   below only exists while the menu is open (plus a short close tail). */
-.workspace-menu-zipper {
-  position: absolute;
-  top: 12px;
-  bottom: 12px;
-  left: 0;
-  right: 0;
-  pointer-events: none;
-  /* The solid black channel, revealed top-to-bottom in sync with the runner.
-     clip-path inset(0 0 100% 0) = fully hidden; inset(0) = fully revealed. */
-  background: linear-gradient(
-    90deg,
-    transparent calc(50% - 7px),
-    #000 calc(50% - 7px),
-    #000 calc(50% + 7px),
-    transparent calc(50% + 7px)
-  );
-  clip-path: inset(0 0 100% 0);
-  transition: clip-path 320ms cubic-bezier(0.22, 1, 0.36, 1);
+/* The sparkles glyph. The .open state only adds the soft ring — the glyph
+   itself never changes shade. */
+.workspace-menu-spark {
+  width: 22px;
+  height: 22px;
+  display: block;
+  color: var(--orange);
+  transition: filter 300ms ease;
 }
 
-.workspace-menu.open .workspace-menu-zipper {
-  clip-path: inset(0 0 0 0);
+.workspace-menu.open .workspace-menu-spark {
+  filter: drop-shadow(0 0 5px rgba(255, 106, 28, 0.4));
 }
 
-/* Six teeth: three per side (4px wide x 6px tall), overlapping at the center
-   when closed. On open the columns slide apart ±7px, revealing the black
-   channel between them; on close they rejoin, then the whole zipper fades. */
-.workspace-menu-zipper::before,
-.workspace-menu-zipper::after {
+/* Luminous ring hugging the full circular perimeter. Invisible (and not
+   painted) until the menu is open, then it fades in, stays for the entire
+   open duration, and fades out on close. */
+.workspace-menu-trigger::after {
   content: "";
   position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 4px;
-  background: repeating-linear-gradient(
-    180deg,
-    transparent 0 5px,
-    #fffaf3 5px 11px,
-    transparent 11px 16px
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background: linear-gradient(
+    140deg,
+    var(--orange-glow),
+    var(--orange) 55%,
+    var(--solar-red)
   );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  padding: 1.5px;
   opacity: 0;
-  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 160ms ease 320ms;
+  transition: opacity 300ms ease;
 }
 
-.workspace-menu-zipper::before {
-  margin-left: -4px; /* left column: center-4 -> center (interlocked at rest) */
+.workspace-menu.open .workspace-menu-trigger {
+  box-shadow:
+    var(--gel-shadow-sm),
+    0 0 0 3px rgba(255, 106, 28, 0.16),
+    0 0 18px rgba(255, 106, 28, 0.32);
 }
 
-.workspace-menu-zipper::after {
-  margin-left: 0; /* right column: center -> center+4 (interlocked at rest) */
+.workspace-menu.open .workspace-menu-trigger::after {
+  opacity: 0.85;
 }
 
-.workspace-menu.open .workspace-menu-zipper::before {
-  transform: translateX(-7px);
-  opacity: 1;
-  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 120ms ease;
-}
 
-.workspace-menu.open .workspace-menu-zipper::after {
-  transform: translateX(7px);
-  opacity: 1;
-  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 120ms ease;
-}
-
-/* Zipper pull: appears at the top as the menu opens, rides to the bottom,
-   returns to the top on close, then disappears with the teeth. */
-.workspace-menu-runner {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  width: 9px;
-  height: 16px;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  background: #fffaf3;
-  box-shadow: 0 1px 3px rgba(217, 2, 6, 0.45);
-  opacity: 0;
-  transition: top 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 160ms ease 320ms;
-}
-
-.workspace-menu.open .workspace-menu-runner {
-  top: calc(100% - 12px);
-  opacity: 1;
-  transition: top 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 120ms ease;
-}
 
 .workspace-menu-panel {
   position: absolute;
@@ -763,6 +736,12 @@
   letter-spacing: -0.02em;
 }
 
+.headline-script {
+  font-family: "Caveat", "Segoe Script", cursive;
+  font-weight: 600;
+  color: var(--ink);
+}
+
 .empty-helper {
   margin: 0;
   color: var(--ink-faint);
@@ -871,30 +850,6 @@
   box-shadow: var(--gel-shadow-sm);
 }
 
-.message-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 7px;
-}
-
-.sender-name {
-  color: currentColor;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  opacity: 0.68;
-  text-transform: uppercase;
-}
-
-.message-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.action-icon-btn,
 .copy-btn,
 .toggle-btn,
 .vn-play-btn {
@@ -906,20 +861,42 @@
   cursor: pointer;
 }
 
-.action-icon-btn {
-  width: 27px;
-  height: 27px;
-  border-radius: 50%;
-  opacity: 0.58;
-  transition: opacity 180ms ease, background 180ms ease;
-}
-
 .message-text {
   color: inherit;
   font-size: 14px;
   line-height: 1.65;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.send-button .line-icon {
+  display: block;
+  margin: 0;
+}
+
+/* Inline replay affordance for a voice response. Sits immediately after the
+   transcript text (an inline-grid inside the paragraph) so it follows the
+   text naturally, wrapping to a new line only if the text runs off the edge. */
+.voice-replay-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  opacity: 0.62;
+  background: transparent;
+  vertical-align: -0.18em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: opacity 180ms ease;
+}
+
+.voice-replay-btn:hover,
+.voice-replay-btn:focus-visible {
+  opacity: 1;
 }
 
 /* Voice note: a clean, intentional chat tail pointing toward the speaker
@@ -954,14 +931,16 @@
   display: flex;
   min-width: 0;
   flex: 1;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  gap: 8px;
 }
 
 .vn-waveform-track {
   position: relative;
   display: flex;
   height: 25px;
+  min-width: 0;
+  flex: 1;
   align-items: center;
   overflow: hidden;
   border-radius: 5px;
@@ -993,20 +972,11 @@
 }
 
 .vn-duration {
-  align-self: flex-end;
+  flex: 0 0 auto;
+  align-self: center;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   opacity: 0.78;
-}
-
-.vn-mic-icon {
-  flex: 0 0 auto;
-  opacity: 0.72;
-}
-
-.voice-response .message-text {
-  color: var(--ink-soft);
-  font-size: 13px;
 }
 
 /* Floating composer */
@@ -1094,7 +1064,7 @@
 
 .mic-button,
 .send-button {
-  display: inline-grid;
+  display: grid;
   width: 47px;
   height: 47px;
   flex: 0 0 auto;
@@ -1390,8 +1360,7 @@
 
 @media (hover: hover) {
   .toggle-btn:hover,
-  .copy-btn:hover,
-  .action-icon-btn:hover {
+  .copy-btn:hover {
     color: var(--orange-strong);
     background: rgba(255, 106, 28, 0.08);
     opacity: 1;
@@ -1671,10 +1640,6 @@
 
   .vn-bars {
     gap: 1px;
-  }
-
-  .vn-mic-icon {
-    display: none;
   }
 
   .input-container {

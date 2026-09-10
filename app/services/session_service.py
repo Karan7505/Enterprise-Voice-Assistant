@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 
 from app.core.config import settings
 from app.prompts.chat_prompt import build_prompt
@@ -17,6 +18,24 @@ from app.connectors.orchestrator import run_business_action
 logger = logging.getLogger(__name__)
 
 DEFAULT_SESSION_ID = "default"
+
+# History is useful for a clear follow-up, but silently carrying an old
+# recipient, action, topic, or safety state into a fresh request is unsafe.
+# Keep the default conservative: only messages that explicitly refer back to
+# an earlier turn receive prior conversational context.
+_CONTINUATION_PATTERN = re.compile(
+    r"^(?:and|also|then|continue|same|as above|follow(?: |-)?up|what about|how about|"
+    r"that|those|it|them|him|her)\b|"
+    r"\b(?:that|those|it|them|him|her|as above|the same)\b",
+    re.IGNORECASE,
+)
+
+
+def should_include_history(message: str, history: list[dict[str, str]]) -> bool:
+    """Use prior turns only when the new message clearly continues them."""
+    if not history:
+        return False
+    return bool(_CONTINUATION_PATTERN.search(" ".join((message or "").split())))
 
 
 class SessionContext:
@@ -88,6 +107,8 @@ def process_message(
         if max_history > 0
         else session.chat_history
     )
+    if not should_include_history(message, recent_history):
+        recent_history = []
 
     history_text = "\n".join(
         f'{item["role"]}: {item["content"]}'

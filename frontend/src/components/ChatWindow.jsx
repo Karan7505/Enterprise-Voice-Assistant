@@ -17,6 +17,7 @@ function ChatWindow({
   voiceTranscriptReveal,
   userName,
   isOrbCollapsed,
+  isVoiceOrbActive = false,
   freezeOverflowMeasurements = false,
   onScrollableChange,
 }) {
@@ -24,7 +25,10 @@ function ChatWindow({
   const chatBoxRef = useRef(null);
   const chatThreadRef = useRef(null);
   const wasNearBottomRef = useRef(true);
-  const previousOrbStateRef = useRef(isOrbCollapsed);
+  const previousOrbStateRef = useRef({
+    collapsed: isOrbCollapsed,
+    voiceActive: isVoiceOrbActive,
+  });
   const [localHour, setLocalHour] = useState(() => new Date().getHours());
   const revealedMessageId = voiceTranscriptReveal?.messageId ?? "";
   const revealedText = voiceTranscriptReveal?.text ?? "";
@@ -137,8 +141,17 @@ function ChatWindow({
   // If the reader was already at the newest message, keep that position while
   // the orb's smooth height transition changes the chat viewport.
   useLayoutEffect(() => {
-    if (previousOrbStateRef.current === isOrbCollapsed) return undefined;
-    previousOrbStateRef.current = isOrbCollapsed;
+    const previousOrbState = previousOrbStateRef.current;
+    if (
+      previousOrbState.collapsed === isOrbCollapsed &&
+      previousOrbState.voiceActive === isVoiceOrbActive
+    ) {
+      return undefined;
+    }
+    previousOrbStateRef.current = {
+      collapsed: isOrbCollapsed,
+      voiceActive: isVoiceOrbActive,
+    };
 
     const chatBox = chatBoxRef.current;
     if (!chatBox || !wasNearBottomRef.current) return undefined;
@@ -166,7 +179,7 @@ function ChatWindow({
         window.cancelAnimationFrame(animationFrameId);
       }
     };
-  }, [isOrbCollapsed]);
+  }, [isOrbCollapsed, isVoiceOrbActive]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({
@@ -195,14 +208,12 @@ function ChatWindow({
           <div className="empty-hero">
             <h1 className="time-greeting">
               {greeting}
-              {userName ? (
-                <>
-                  {" "}
-                  <span className="greeting-name">{userName}</span>
-                </>
-              ) : null}
+              {userName ? ", " : null}
+              {userName ? <span className="greeting-name">{userName}</span> : null}
             </h1>
-            <h2 className="empty-headline">What&rsquo;s the Mission Today?</h2>
+            <h2 className="empty-headline">
+              What<span className="headline-script">’s</span> the mission today?
+            </h2>
             <p className="empty-helper">Speak naturally or type a message to begin.</p>
           </div>
         </div>

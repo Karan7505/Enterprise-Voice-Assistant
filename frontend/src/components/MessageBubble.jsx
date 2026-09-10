@@ -21,7 +21,6 @@ function MessageBubble({
   const vnObjectUrlRef = useRef(null);
 
   const isVoiceNote = type === "audio" && isUser;
-  const displaySender = !isUser && !isSystem ? "JARVIS" : sender;
 
   const disposeVoiceAudio = useCallback(() => {
     const audio = vnAudioRef.current;
@@ -152,31 +151,24 @@ function MessageBubble({
               </span>
             </div>
 
-            <span className="vn-mic-icon" aria-hidden="true">
-              <Icon name="mic" size={17} />
-            </span>
           </div>
         </div>
       ) : (
-        <div className={`message-bubble ${isUser ? "user-message" : isSystem ? "system-message" : "ai-message"}${responseMode === "voice" && !isUser && !isSystem ? " voice-response" : ""}`}>
-          {(!isUser && responseMode === "voice" && audioUrl) && (
-            <div className="message-header">
-              <span className="sender-name">{displaySender}</span>
-              <div className="message-actions">
-                <button
-                  type="button"
-                  className="action-icon-btn"
-                  onClick={() => playAudio(audioUrl)}
-                  title="Replay voice"
-                  aria-label="Replay voice response"
-                >
-                  <Icon name="volume" size={16} />
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="message-text">{displayText}</div>
+        <div className={`message-bubble ${isUser ? "user-message" : isSystem ? "system-message" : "ai-message"}`}>
+          <div className="message-text">
+            {displayText}
+            {responseMode === "voice" && !isUser && !isSystem && audioUrl && (
+              <button
+                type="button"
+                className="voice-replay-btn"
+                onClick={() => playAudio(audioUrl)}
+                title="Replay voice"
+                aria-label="Replay voice response"
+              >
+                <Icon name="volume" size={15} />
+              </button>
+            )}
+          </div>
         </div>
       )}
 

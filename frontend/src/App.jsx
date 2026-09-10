@@ -938,8 +938,23 @@ function App() {
                 aria-label="Menu"
                 title="Menu"
               >
-                <span className="workspace-menu-zipper" aria-hidden="true" />
-                <span className="workspace-menu-runner" aria-hidden="true" />
+                {/* Sparkles glyph (design source of truth): a 4-point star,
+                    a small star, and a dot — rendered in the app's exact
+                    --orange so the shade matches the rest of the system. */}
+                <svg
+                  className="workspace-menu-spark"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M12 4 L13.6 10.4 L20 12 L13.6 13.6 L12 20 L10.4 13.6 L4 12 L10.4 10.4 Z" />
+                  <path d="M18.5 2.8 L19.1 4.9 L21.2 5.5 L19.1 6.1 L18.5 8.2 L17.9 6.1 L15.8 5.5 L17.9 4.9 Z" />
+                  <circle cx="6.2" cy="18.4" r="1.5" fill="currentColor" stroke="none" />
+                </svg>
               </button>
               <div className="workspace-menu-panel" role="menu">
                 <button
@@ -999,6 +1014,7 @@ function App() {
             voiceTranscriptReveal={voiceTranscriptReveal}
             userName={userName}
             isOrbCollapsed={isOrbHidden}
+            isVoiceOrbActive={isVoiceOrbActive}
             freezeOverflowMeasurements={isVoiceOrbActive}
             onScrollableChange={setChatScrollable}
           />
