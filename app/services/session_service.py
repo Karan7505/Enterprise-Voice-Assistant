@@ -23,10 +23,13 @@ DEFAULT_SESSION_ID = "default"
 # recipient, action, topic, or safety state into a fresh request is unsafe.
 # Keep the default conservative: only messages that explicitly refer back to
 # an earlier turn receive prior conversational context.
+# Pronouns such as "it" only count in an action-plus-reference continuation,
+# not in a standalone question that happens to mention the same word.
 _CONTINUATION_PATTERN = re.compile(
-    r"^(?:and|also|then|continue|same|as above|follow(?: |-)?up|what about|how about|"
-    r"that|those|it|them|him|her)\b|"
-    r"\b(?:that|those|it|them|him|her|as above|the same)\b",
+    r"^(?:and|also|then|continue|same|as above|follow(?: |-)?up|what about|how about)\b|"
+    r"\b(?:send|message|email|call|text|reply|tell|write|forward|share|schedule|book|deliver|repeat|resend|update|check)\b"
+    r"[^.?!;]*\b(?:it|that|those|them|him|her)\b|"
+    r"\b(?:as above|the same)\b",
     re.IGNORECASE,
 )
 

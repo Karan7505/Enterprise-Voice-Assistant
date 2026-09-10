@@ -72,6 +72,15 @@ class BusinessActionParsingTests(unittest.TestCase):
         self.assertTrue(is_ambiguous_recipient("someone"))
         self.assertFalse(is_ambiguous_recipient("Rahul"))
 
+    def test_vague_recipient_supports_normalized_one_of_my_relations(self):
+        self.assertTrue(is_ambiguous_recipient("one of my coworkers"))
+        self.assertTrue(is_ambiguous_recipient("one of my friends from college"))
+
+    def test_vague_recipient_accepts_hyphenated_and_possessive_one_of_my_phrases(self):
+        self.assertTrue(is_ambiguous_recipient("one of my co-worker"))
+        self.assertTrue(is_ambiguous_recipient("One of my coworker's friend"))
+        self.assertTrue(is_ambiguous_recipient("one of my family-friend's spouse"))
+
     def test_vague_recipient_requests_clarification_without_crm_lookup(self):
         with unittest.mock.patch.object(orchestrator, "get_crm") as get_crm:
             result = execute_action(

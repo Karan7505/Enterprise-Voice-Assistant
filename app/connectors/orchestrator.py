@@ -36,7 +36,7 @@ _RECIPIENT_ACTIONS = {"whatsapp_message", "email"}
 # They must never be passed to CRM resolution as if they were literal names;
 # the assistant needs to ask who the user means first.
 _AMBIGUOUS_RECIPIENT_PATTERNS = (
-    re.compile(r"^one of my\s+", re.IGNORECASE),
+    re.compile(r"^one of my\s+.+$", re.IGNORECASE),
     re.compile(r"^(?:a|one of my|one of the)\s+(?:friends?|colleagues?|contacts?)$", re.IGNORECASE),
     re.compile(r"^(?:someone|somebody|anyone|anybody)$", re.IGNORECASE),
     re.compile(r"^(?:my\s+)?(?:friend|colleague|contact|boss|manager)$", re.IGNORECASE),
