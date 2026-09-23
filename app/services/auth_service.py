@@ -13,7 +13,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from datetime import datetime, timedelta, timezone
 
+from app.core.config import settings
 from app.core.database import get_connection
 
 PBKDF2_ITERATIONS = 200_000
@@ -75,9 +77,12 @@ def authenticate(username: str, password: str) -> str | None:
             return None
 
         token = secrets.token_hex(TOKEN_BYTES)
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(minutes=settings.TOKEN_TTL_MINUTES)
         conn.execute(
-            "INSERT INTO auth_sessions (token, user_id) VALUES (?, ?)",
-            (token, row["id"]),
+            "INSERT INTO auth_sessions (token, user_id, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token, row["id"], now.isoformat(), expires_at.isoformat()),
         )
         conn.commit()
         return token
@@ -93,7 +98,7 @@ def resolve_user(token: str) -> dict | None:
     try:
         row = conn.execute(
             """
-            SELECT u.id AS user_id, u.username, s.token
+            SELECT u.id AS user_id, u.username, s.expires_at
             FROM auth_sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.token = ?
@@ -102,6 +107,23 @@ def resolve_user(token: str) -> dict | None:
         ).fetchone()
         if not row:
             return None
+
+        # Reject expired sessions. Rows created before expiry existed have a
+        # NULL expires_at and are accepted (graceful upgrade path).
+        if row["expires_at"]:
+            try:
+                expiry = datetime.fromisoformat(row["expires_at"])
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) >= expiry:
+                    conn.execute(
+                        "DELETE FROM auth_sessions WHERE token = ?", (token,)
+                    )
+                    conn.commit()
+                    return None
+            except ValueError:
+                pass
+
         return {
             "user_id": row["user_id"],
             "username": row["username"],
@@ -119,5 +141,19 @@ def revoke_token(token: str) -> None:
     try:
         conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def username_for_user_id(user_id: int | None) -> str | None:
+    """Look up a username from its numeric id (for the action policy gate)."""
+    if user_id is None:
+        return None
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT username FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        return row["username"] if row else None
     finally:
         conn.close()

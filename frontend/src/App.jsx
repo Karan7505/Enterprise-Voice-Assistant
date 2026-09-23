@@ -11,22 +11,17 @@ import Icon from "./components/Icon";
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 const CHAT_REQUEST_TIMEOUT_MS = 60_000;
 const CLEAR_REQUEST_TIMEOUT_MS = 15_000;
-const TOKEN_STORAGE_KEY = "jarvis_auth_token";
+// Mirrors the backend MAX_MESSAGE_LENGTH so over-length input gives clear,
+// local feedback instead of a generic server error.
+const MAX_MESSAGE_LENGTH = 4000;
 
-const getStoredToken = () => localStorage.getItem(TOKEN_STORAGE_KEY) || "";
-const storeToken = (token) => {
-  if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
-  else localStorage.removeItem(TOKEN_STORAGE_KEY);
-};
+// The session is an HttpOnly cookie set by the API on login; withCredentials makes
+// axios send it on cross-origin calls (page JS can't read it, so XSS can't steal it).
+axios.defaults.withCredentials = true;
 
-// Every request carries the bearer token; a 401 anywhere logs the user out so
-// the app returns to the login screen instead of surfacing raw auth errors.
+// A 401 from any endpoint logs the user out so the app returns to the login
+// screen instead of surfacing raw auth errors.
 let unauthorizedHandler = null;
-axios.interceptors.request.use((config) => {
-  const token = getStoredToken();
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
 axios.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -112,7 +107,7 @@ function App() {
   const [voiceOrbActivity, setVoiceOrbActivity] = useState("idle");
   const [chatScrollable, setChatScrollable] = useState(false);
   const [isClearingConversation, setIsClearingConversation] = useState(false);
-  const [isAuthed, setIsAuthed] = useState(() => Boolean(getStoredToken()));
+  const [isAuthed, setIsAuthed] = useState(false);
   const [isFullResetting, setIsFullResetting] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
   const [accountName, setAccountName] = useState("");
@@ -351,7 +346,6 @@ function App() {
   // return to the login screen.
   useEffect(() => {
     unauthorizedHandler = () => {
-      storeToken("");
       stopResponsePlayback();
       setIsAuthed(false);
       setAccountName("");
@@ -363,23 +357,26 @@ function App() {
     };
   }, [stopResponsePlayback]);
 
-  // Restore the account identity on load/refresh (the token persists, but the
-  // name does not). Skipped when a fresh login already supplied the name.
+  // On load/refresh, ask the server whether the (HttpOnly cookie) session is
+  // still valid. Page JS can't read the cookie, so this one probe is how we
+  // restore a logged-in state; a 401 leaves isAuthed false (login screen).
   useEffect(() => {
-    if (!isAuthed || accountName) return undefined;
     let cancelled = false;
     axios
       .get(`${API_BASE}/auth/me`)
       .then((res) => {
         if (!cancelled && res.data?.user?.username) {
+          setIsAuthed(true);
           setAccountName(res.data.user.username);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setIsAuthed(false);
+      });
     return () => {
       cancelled = true;
     };
-  }, [isAuthed, accountName]);
+  }, []);
 
   // Restore persisted server state once authenticated, so an existing
   // conversation is not briefly treated as a fresh, empty session. Re-runs when
@@ -655,6 +652,18 @@ function App() {
     ) {
       return;
     }
+    if (userMessage.length > MAX_MESSAGE_LENGTH) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createMessageId(),
+          sender: "System",
+          text: "That message is too long to send.",
+          type: "text",
+        },
+      ]);
+      return;
+    }
 
     clearedSectionsRef.current = { conversation: false, memory: false };
     stopResponsePlayback();
@@ -681,6 +690,18 @@ function App() {
       conversationClearInFlightRef.current ||
       fullResetInFlightRef.current
     ) {
+      return;
+    }
+    if (voiceTranscript.length > MAX_MESSAGE_LENGTH) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createMessageId(),
+          sender: "System",
+          text: "That message is too long to send.",
+          type: "text",
+        },
+      ]);
       return;
     }
 
@@ -894,7 +915,6 @@ function App() {
     } catch {
       // Best effort: revoke server-side, but always clear the local session.
     }
-    storeToken("");
     stopResponsePlayback();
     setAccountName("");
     setMessages([]);
@@ -1072,7 +1092,6 @@ function AuthScreen({ onAuthenticated }) {
       if (!data?.token) {
         throw new Error("Login failed.");
       }
-      storeToken(data.token);
       onAuthenticated(data.user?.username || username.trim());
     } catch (err) {
       const detail = err?.response?.data?.detail;

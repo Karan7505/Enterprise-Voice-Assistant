@@ -50,3 +50,4 @@ Thumbs.db
 # --- Miscellaneous ---
 *.log
 *.bak
+.uv-cache/

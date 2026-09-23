@@ -229,6 +229,62 @@ class Settings:
     EMAIL_PASSWORD: str = clean_str(os.getenv("EMAIL_PASSWORD"))
     EMAIL_USE_TLS: bool = clean_bool(os.getenv("EMAIL_USE_TLS"), default=True)
 
+    # --- Security controls ---------------------------------------------------
+    # Session tokens expire after this long (absolute TTL, minutes).
+    TOKEN_TTL_MINUTES: int = clean_int(
+        os.getenv("TOKEN_TTL_MINUTES"), default=720, minimum=1
+    )
+    # Session cookie (auth transport). The token is delivered in an HttpOnly
+    # cookie page JS cannot read (closes the localStorage-XSS theft path, M-5);
+    # the API also accepts the classic "Authorization: Bearer" header.
+    COOKIE_NAME: str = clean_str(os.getenv("COOKIE_NAME"), "jarvis_token")
+    # Same-site / localhost (dev + most reverse-proxy setups) -> "lax". A
+    # cross-site API host -> "none" (requires HTTPS).
+    COOKIE_SECURE: bool = clean_bool(os.getenv("COOKIE_SECURE"), default=True)
+    COOKIE_SAMESITE: str = clean_str(os.getenv("COOKIE_SAMESITE"), "lax").lower()
+    COOKIE_PATH: str = clean_str(os.getenv("COOKIE_PATH"), "/")
+    # Maximum length of a single chat message (guards LLM/TTS/DB cost).
+    MAX_MESSAGE_LENGTH: int = clean_int(
+        os.getenv("MAX_MESSAGE_LENGTH"), default=4000, minimum=1
+    )
+    # Open self-registration. Set to false in production to require accounts to
+    # be provisioned out-of-band (also removes username enumeration).
+    ALLOW_REGISTRATION: bool = clean_bool(os.getenv("ALLOW_REGISTRATION"), default=True)
+
+    # Fixed-window rate limits. 0 disables a given limiter.
+    RATE_LIMIT_LOGIN: int = clean_int(os.getenv("RATE_LIMIT_LOGIN"), default=5, minimum=0)
+    RATE_LIMIT_REGISTER: int = clean_int(os.getenv("RATE_LIMIT_REGISTER"), default=5, minimum=0)
+    RATE_LIMIT_CHAT: int = clean_int(os.getenv("RATE_LIMIT_CHAT"), default=12, minimum=0)
+    RATE_LIMIT_WINDOW_SECONDS: int = clean_int(
+        os.getenv("RATE_LIMIT_WINDOW_SECONDS"), default=60, minimum=1
+    )
+
+    # Outbound business actions (WhatsApp / Email). Fail closed by default:
+    # disabled unless explicitly enabled AND the acting user is allowlisted.
+    BUSINESS_ACTIONS_ENABLED: bool = clean_bool(
+        os.getenv("BUSINESS_ACTIONS_ENABLED"), default=False
+    )
+    # Comma-separated usernames allowed to trigger sends (case-insensitive).
+    BUSINESS_ACTION_ALLOWED_USERS: str = clean_str(
+        os.getenv("BUSINESS_ACTION_ALLOWED_USERS")
+    )
+    # Per-user cap on outbound sends per rolling hour. 0 disables the cap.
+    BUSINESS_ACTION_MAX_PER_HOUR: int = clean_int(
+        os.getenv("BUSINESS_ACTION_MAX_PER_HOUR"), default=20, minimum=0
+    )
+    # Require an explicit yes/no confirmation before any real send.
+    BUSINESS_ACTION_REQUIRE_CONFIRMATION: bool = clean_bool(
+        os.getenv("BUSINESS_ACTION_REQUIRE_CONFIRMATION"), default=True
+    )
+    # How long (seconds) a staged action waits for a confirm/cancel.
+    BUSINESS_ACTION_CONFIRM_TTL_SECONDS: int = clean_int(
+        os.getenv("BUSINESS_ACTION_CONFIRM_TTL_SECONDS"), default=300, minimum=1
+    )
+
+    # --- Storage paths (absolute; env-overridable) ---------------------------
+    DATABASE_PATH: str = clean_str(os.getenv("DATABASE_PATH"), "assistant.db")
+    AUDIO_DIR: str = clean_str(os.getenv("AUDIO_DIR"), "audio")
+
 
 settings = Settings()
 

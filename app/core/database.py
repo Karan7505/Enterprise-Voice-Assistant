@@ -1,12 +1,15 @@
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path("assistant.db")
+from app.core.config import settings
+
+DB_PATH = Path(settings.DATABASE_PATH).resolve()
 
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -61,6 +64,7 @@ def initialize_database():
             token TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NULL,
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
         """
@@ -76,6 +80,54 @@ def initialize_database():
         )
         """
     )
+
+    # Fixed-window rate-limit counters (auth by IP, chat by user, sends by user).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+            key TEXT PRIMARY KEY,
+            window_start INTEGER NOT NULL,
+            count INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+
+    # Audit trail for outbound business actions (who sent what to whom, outcome).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS action_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            channel TEXT,
+            recipient TEXT,
+            subject TEXT,
+            message_sha1 TEXT,
+            outcome TEXT,
+            detail TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    # A business action staged for explicit confirm/cancel, one per session.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pending_actions (
+            session_id TEXT PRIMARY KEY,
+            action_json TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+
+    # Backfill expires_at for databases created before session expiry existed.
+    session_columns = [
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(auth_sessions)").fetchall()
+    ]
+    if "expires_at" not in session_columns:
+        conn.execute("ALTER TABLE auth_sessions ADD COLUMN expires_at TIMESTAMP NULL")
 
     # Add session_id if upgrading an existing messages table
     columns = [

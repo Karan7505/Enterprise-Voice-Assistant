@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: assistant
+          POSTGRES_PASSWORD: assistant-ci
+          POSTGRES_DB: assistant_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U assistant"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://assistant:assistant-ci@localhost:5432/assistant_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Dependency audit (informational; DEP-1 risk-accepted click/gTTS pin)
+        continue-on-error: true
+        run: pip-audit -r requirements.txt
+      - name: Security scan (informational baseline)
+        continue-on-error: true
+        run: |
+          pip install bandit
+          bandit -r app/ -ll || true
+      - name: Run backend test suite (PostgreSQL)
+        run: python -m unittest discover -s tests -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+      - name: Install (frozen lockfile)
+        working-directory: frontend
+        run: npm ci
+      - name: Audit (informational; dev-only transitive advisories documented in docs/)
+        continue-on-error: true
+        working-directory: frontend
+        run: npm audit
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+      - name: Build
+        working-directory: frontend
+        run: npm run build

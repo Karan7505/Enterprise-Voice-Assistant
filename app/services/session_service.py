@@ -4,6 +4,8 @@ import re
 
 from app.core.config import settings
 from app.prompts.chat_prompt import build_prompt
+from app.services import action_policy
+from app.services.auth_service import username_for_user_id
 from app.services.context_builder import build_context
 from app.services.database_chat_history import add_message, get_messages, clear_messages
 from app.services.llm_service import LLMError, generate
@@ -13,7 +15,7 @@ from app.services.memory_service import (
     delete_memories,
     clear_memories,
 )
-from app.connectors.orchestrator import run_business_action
+from app.connectors.orchestrator import BusinessAction, execute_action, run_business_action
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +95,51 @@ def update_memories(
     )
 
 
+def _user_id_from_session(session_id: str) -> int | None:
+    """Extract the numeric user id from a ``user:<id>`` session scope."""
+    if not session_id or not session_id.startswith("user:"):
+        return None
+    try:
+        return int(session_id.split(":", 1)[1])
+    except ValueError:
+        return None
+
+
+def _confirmation_prompt(action: BusinessAction) -> str:
+    verb = "an email to" if action.action == "email" else "a WhatsApp message to"
+    preview = (action.message or "").strip()
+    if len(preview) > 90:
+        preview = preview[:87] + "..."
+    line = f"Before I send {verb} {action.recipient}"
+    if action.subject:
+        line += f' with subject "{action.subject}"'
+    if preview:
+        line += f' saying "{preview}"'
+    return line + " - shall I? Say yes to send, or no to cancel."
+
+
+def _run_and_audit(
+    user_id: int | None,
+    username: str | None,
+    action: BusinessAction,
+    ack: str = "",
+) -> str:
+    """Execute a policy-cleared action and record it in the audit trail."""
+    result = execute_action(action)
+    action_policy.record_action(
+        user_id,
+        username,
+        action.action,
+        action.recipient,
+        action.subject,
+        action.message,
+        result.code.value,
+        "" if result.success else result.message,
+    )
+    ack_stripped = (ack or "").strip()
+    return f"{ack_stripped} {result.message}".strip() if ack_stripped else result.message
+
+
 def process_message(
     message: str,
     session_id: str = DEFAULT_SESSION_ID,
@@ -102,6 +149,53 @@ def process_message(
         user_message=message,
         session_id=session_id,
     )
+
+    user_id = _user_id_from_session(session_id)
+    username = username_for_user_id(user_id) if user_id is not None else None
+
+    # An explicit confirm/cancel for a previously staged send takes precedence
+    # over a fresh LLM turn. Anything that isn't a clear yes/no is treated as a
+    # new request, which discards the staged action (fail-safe: no accidental send).
+    pending = action_policy.get_pending_action(session_id)
+    if pending is not None:
+        decision = action_policy.classify_confirmation(message)
+        if decision in ("yes", "no"):
+            action = BusinessAction.from_dict(pending)
+            action_policy.clear_pending_action(session_id)
+            if decision == "yes" and action is not None and action.is_complete():
+                allowed, reason = action_policy.is_enabled_for(username)
+                if not allowed:
+                    action_policy.record_action(
+                        user_id, username, action.action, action.recipient,
+                        action.subject, action.message, "denied_policy", reason,
+                    )
+                    reply = reason
+                else:
+                    cap_ok, _retry = action_policy.hourly_cap_ok(user_id)
+                    if not cap_ok:
+                        action_policy.record_action(
+                            user_id, username, action.action, action.recipient,
+                            action.subject, action.message, "rate_limited",
+                            "hourly cap reached",
+                        )
+                        reply = (
+                            "You've reached your hourly sending limit. "
+                            "Please try again later."
+                        )
+                    else:
+                        reply = _run_and_audit(user_id, username, action)
+            else:
+                reply = "Okay, I've cancelled that. Nothing was sent."
+            session.chat_history.append({"role": "user", "content": message})
+            session.chat_history.append({"role": "assistant", "content": reply})
+            add_message(
+                "user", message, session.session_id,
+                mode="voice" if mode == "voice" else "text",
+            )
+            add_message("assistant", reply, session.session_id)
+            return reply
+        # Not a yes/no: drop the stale staged action and continue with a new turn.
+        action_policy.clear_pending_action(session_id)
 
     # Task 3: Send only the most recent N messages for conversation context
     max_history = settings.MAX_HISTORY_MESSAGES
@@ -153,10 +247,43 @@ def process_message(
 
     reply = reply.strip()
 
-    # Business actions (WhatsApp / email) are executed here through the
-    # connector layer. This is the single bridge between the chat flow and any
-    # external provider, so no provider code lives in the LLM/prompt path.
-    reply = run_business_action(reply, action_data)
+    # Business actions (WhatsApp / email): the model only *proposes* an action.
+    # Whether it is allowed, whether it needs an explicit confirmation, and how
+    # often it may run are decided here in code (action_policy) — the LLM is
+    # never the authorizer. The orchestrator is invoked only for actions that
+    # clear this gate; ambiguous/incomplete requests fall through to the
+    # existing clarification path, which resolves nothing and never sends.
+    if action_data is not None:
+        action = BusinessAction.from_dict(action_data)
+        if action is not None and action.is_complete():
+            allowed, reason = action_policy.is_enabled_for(username)
+            if not allowed:
+                action_policy.record_action(
+                    user_id, username, action.action, action.recipient,
+                    action.subject, action.message, "denied_policy", reason,
+                )
+                reply = f"{reply} {reason}".strip()
+            elif settings.BUSINESS_ACTION_REQUIRE_CONFIRMATION:
+                # Stage the action and require an explicit yes on the next turn.
+                action_policy.store_pending_action(session_id, action_data)
+                reply = _confirmation_prompt(action)
+            else:
+                cap_ok, _retry = action_policy.hourly_cap_ok(user_id)
+                if not cap_ok:
+                    action_policy.record_action(
+                        user_id, username, action.action, action.recipient,
+                        action.subject, action.message, "rate_limited",
+                        "hourly cap reached",
+                    )
+                    reply = (
+                        f"{reply} You've reached your hourly sending limit. "
+                        "Please try again later."
+                    ).strip()
+                else:
+                    action_policy.clear_pending_action(session_id)
+                    reply = _run_and_audit(user_id, username, action, ack=reply)
+        else:
+            reply = run_business_action(reply, action_data)
 
     # Process explicit deletions if requested by user
     if delete_keys:

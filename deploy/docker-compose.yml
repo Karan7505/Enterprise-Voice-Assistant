@@ -1,0 +1,47 @@
+# Starting point for deploying the Enterprise Voice Assistant.
+#
+# Two services: the FastAPI backend (private) and Caddy (public entrypoint that
+# serves the SPA, terminates TLS, and sets the strict CSP + security headers).
+#
+# Adapt the domain, ports, and secret injection to your environment before use.
+# Put your real secrets in .env at the repo root (gitignored) or your secret
+# store; never bake them into this file.
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - ../.env
+    restart: unless-stopped
+    # Internal only; Caddy is the sole public entrypoint.
+    expose:
+      - "8000"
+    volumes:
+      - api-data:/srv/data
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Serve the pre-built SPA: run (cd frontend && npm run build) first.
+      - ../frontend/dist:/srv/frontend/dist:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - internal
+
+volumes:
+  api-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  internal:

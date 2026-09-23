@@ -1,0 +1,40 @@
+# Reverse proxy for the Enterprise Voice Assistant.
+#
+# Serves the built SPA (frontend/dist) and proxies the FastAPI backend, and sets
+# the strict Content-Security-Policy + security headers required by the security
+# audit (M-4). Caddy provisions TLS automatically (ACME) for a real domain.
+#
+# The SPA and API share ONE origin here, so the HttpOnly session cookie is
+# same-site (SameSite=Lax is enough) and the frontend should use an empty
+# VITE_API_BASE_URL (i.e. same-origin API calls).
+#
+# Usage:  caddy run --config deploy/Caddyfile
+# Build first:  (cd frontend && npm run build)   ->  frontend/dist
+
+your-app.example.com {
+	# Strict SPA CSP: only our own scripts (no inline/eval), same-origin fetch,
+	# blob: for TTS audio. Adjust only if your build genuinely needs it.
+	header {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		-Server
+	}
+
+	# API routes (same origin -> same-site cookie works).
+	handle /auth*    { reverse_proxy api:8000 }
+	handle /chat*    { reverse_proxy api:8000 }
+	handle /history* { reverse_proxy api:8000 }
+	handle /memories* { reverse_proxy api:8000 }
+	handle /audio*   { reverse_proxy api:8000 }
+	handle /status*  { reverse_proxy api:8000 }
+
+	# Everything else: the built SPA.
+	handle {
+		root * /srv/frontend/dist
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.core.config import settings
 
-AUDIO_DIR = Path("audio")
+AUDIO_DIR = Path(settings.AUDIO_DIR).resolve()
 logger = logging.getLogger("uvicorn.error")
 
 # Default: delete audio files older than 1 hour (3600 seconds)

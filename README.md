@@ -212,6 +212,21 @@ Copy `.env.example` → `.env`. In local development the root `.env` is authorit
 | `MAX_HISTORY_MESSAGES` | Recent messages sent to the LLM (`0` = all) | `10` |
 | `AUDIO_MAX_AGE_SECONDS` | Age before generated `.mp3` files are cleaned | `3600` |
 
+### Security controls
+| Variable | Purpose | Default |
+|---|---|---|
+| `TOKEN_TTL_MINUTES` | Absolute session-token lifetime | `720` |
+| `MAX_MESSAGE_LENGTH` | Max chat message length | `4000` |
+| `ALLOW_REGISTRATION` | Open self-registration (set `false` in production) | `true` |
+| `RATE_LIMIT_LOGIN` / `RATE_LIMIT_REGISTER` / `RATE_LIMIT_CHAT` | Per-window request caps (`0` disables) | `5` / `5` / `12` |
+| `RATE_LIMIT_WINDOW_SECONDS` | Login/chat rate-limit window | `60` |
+| `BUSINESS_ACTIONS_ENABLED` | Master switch for outbound WhatsApp/email (**fail-closed**) | `false` |
+| `BUSINESS_ACTION_ALLOWED_USERS` | Comma-separated usernames allowed to send | *(empty)* |
+| `BUSINESS_ACTION_MAX_PER_HOUR` | Per-user hourly send cap | `20` |
+| `BUSINESS_ACTION_REQUIRE_CONFIRMATION` | Require explicit yes/no before a real send | `true` |
+| `BUSINESS_ACTION_CONFIRM_TTL_SECONDS` | How long a staged send awaits confirm/cancel | `300` |
+| `DATABASE_PATH` / `AUDIO_DIR` | Absolute storage paths (env-overridable) | `assistant.db` / `audio` |
+
 ### LLM (provide at least one)
 | Variable | Purpose | Default |
 |---|---|---|
@@ -339,7 +354,8 @@ Enterprise-Voice-Assistant/
 | `POST` | `/clear-chat` | ✔ | Clear history, keep memories. |
 | `POST` | `/clear-memories` | ✔ | Clear memories, keep history. |
 | `POST` | `/clear` | ✔ | Wipe the user's history + memories. |
-| `GET` | `/status` | — | Health + active LLM/TTS providers and configured connectors. |
+| `GET` | `/status` | — | Public health check (minimal, no capability detail). |
+| `GET` | `/status/detail` | ✔ | Active LLM/TTS providers and configured connectors. |
 | `GET` | `/audio/{filename}` | ✔ | Stream a generated TTS file (owned by the user). |
 
 ---
@@ -355,7 +371,7 @@ npm run lint
 npm run build
 ```
 
-Backend suite (`tests/`): `test_auth.py` (register/login/logout, wrong password, **two-user data isolation**), `test_crm_rest.py` (REST CRM mapping, auth header, provider selection), `test_connectors.py` (CRM → WhatsApp / Email routing + failure states, mocked), `test_chat_response_modes.py`, `test_config_loading.py`, `test_tts_service.py`.
+Backend suite (`tests/`, 63 tests): `test_auth.py` (register/login/logout, wrong password, **two-user data isolation**), `test_security_controls.py` (token expiry, rate limiting, **fail-closed business actions**, confirm/cancel, allowlist, input cap, username charset, audit trail, HttpOnly cookie attributes), `test_security_boundary.py` (**two-account IDOR isolation**, **prompt-injection boundary** with a mocked compromised LLM, and the **cookie session flow** over the real HTTP surface), `test_context_isolation.py` (history carried only on clear continuations), `test_crm_rest.py` (REST CRM mapping, auth header, provider selection), `test_connectors.py` (CRM → WhatsApp / Email routing + failure states, mocked), `test_chat_response_modes.py`, `test_config_loading.py`, `test_nokey_fallback.py`, `test_tts_service.py`.
 
 ---
 
@@ -385,6 +401,11 @@ The project is verified **locally** to the extent possible without real third-pa
 
 ## 🔒 Security notes
 - Credentials load **only** from `.env` (gitignored) — never hard-coded, never exposed to the frontend.
-- Passwords are salted PBKDF2; sessions are opaque server-stored tokens; logout revokes them.
-- Provider errors are logged server-side; users get generic, provider-neutral messages.
-- Data is scoped per authenticated user; `/audio` is ownership-checked.
+- Passwords are salted PBKDF2 (200k iterations); sessions are opaque server-stored bearer tokens that **expire** (`TOKEN_TTL_MINUTES`) and are revoked on logout.
+- **Business actions (WhatsApp/email) are fail-closed:** disabled unless `BUSINESS_ACTIONS_ENABLED=true` **and** the acting user is in `BUSINESS_ACTION_ALLOWED_USERS`. By default every send also requires an explicit confirm, is capped per user per hour, and is written to an `action_audit` log. The LLM only *proposes* an action — it is never the authorizer (prompt-injection-resistant: memory/history are treated as untrusted data).
+- **Rate limiting** on `/login` and `/register` (by IP) and `/chat` (per user); chat input is length-capped (`MAX_MESSAGE_LENGTH`).
+- **No info disclosure:** public `/status` is minimal; provider/connector detail requires auth (`/status/detail`). Security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`) are set on the API; enforce a strict `Content-Security-Policy` (`script-src 'self'`) at the reverse proxy in front of the SPA.
+- **Session in an HttpOnly cookie** (M-5): the token is delivered in an `HttpOnly; Secure; SameSite` cookie — the API also accepts the `Authorization` header, and the SPA no longer keeps the token in `localStorage` (`COOKIE_*` in the env docs).
+- **Production hardening:** set `ALLOW_REGISTRATION=false` (provision accounts out-of-band, which also removes username enumeration) and pin `DATABASE_PATH`/`AUDIO_DIR`. Ready-to-adapt deployment templates live in [`deploy/`](deploy/README.md) (Caddyfile with TLS + strict `script-src 'self'` CSP, Dockerfile, docker-compose, and `.env.production.example`).
+- **Known dependency caveat (DEP-1):** `pip-audit` flags `click 8.1.8` (transitive via `gTTS`), which can't be patched while `gTTS 2.5.4` is in use (it pins `click<8.2`); the vulnerable path is unreachable (the app uses gTTS as a library and `from gtts import gTTS` does not import `click`). Risk-accepted and documented in [`docs/DEPENDENCY_RISK_ACCEPTANCE.md`](docs/DEPENDENCY_RISK_ACCEPTANCE.md).
+- Data is scoped per authenticated user; `/audio` is ownership-checked. Provider errors are logged server-side; users get generic, provider-neutral messages.

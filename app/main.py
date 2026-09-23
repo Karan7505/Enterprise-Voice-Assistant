@@ -28,5 +28,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Security headers on every API response. The SPA's Content-Security-Policy is
+# enforced at the reverse proxy in production (see README "Security notes");
+# these protect the API surface itself.
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
+
+
 app.include_router(auth_router)
 app.include_router(chat_router)

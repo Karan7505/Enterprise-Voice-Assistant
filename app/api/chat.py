@@ -3,9 +3,9 @@ from pathlib import Path
 import re
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.auth import require_user
 from app.services.session_service import (
@@ -20,17 +20,18 @@ from app.services.llm_service import LLMError
 from app.services.tts_service import generate_speech
 from app.core.config import active_llm, active_tts, settings
 from app.core.database import get_connection
+from app.core.rate_limiter import check_rate_limit, client_ip
 from app.connectors import SUPPORTED_ACTIONS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-AUDIO_DIR = Path("audio")
+AUDIO_DIR = Path(settings.AUDIO_DIR).resolve()
 AUDIO_FILENAME_PATTERN = re.compile(r"^[0-9a-f]{32}\.mp3$")
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=settings.MAX_MESSAGE_LENGTH)
     # Preserve the API's historical voice-first behavior for callers that do
     # not yet send a mode. The frontend always sends its mode explicitly.
     response_mode: Literal["text", "voice"] = "voice"
@@ -67,8 +68,24 @@ def _record_audio_file(filename: str, session_id: str) -> None:
         conn.close()
 
 
+def _chat_rate_limited(user: dict = Depends(require_user)) -> dict:
+    """Rate-limit ``/chat`` per authenticated user. Runs only over HTTP, so the
+    endpoint function stays free of DB access for direct unit tests."""
+    allowed, retry = check_rate_limit(
+        "chat", f"user:{user['user_id']}", settings.RATE_LIMIT_CHAT,
+        settings.RATE_LIMIT_WINDOW_SECONDS,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="You're sending a little too fast. Please wait a moment.",
+            headers={"Retry-After": str(retry)},
+        )
+    return user
+
+
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest, user: dict = Depends(require_user)):
+def chat(request: ChatRequest, user: dict = Depends(_chat_rate_limited)):
     session_id = user["session_id"]
 
     # The assistant needs at least one LLM provider. There is no keyless LLM
@@ -169,6 +186,14 @@ def _configured_connectors() -> list[str]:
 
 @router.get("/status")
 def status():
+    # Public health check only. Capability/architecture detail (which providers
+    # and which outbound connectors are armed) requires authentication, so an
+    # anonymous caller can't fingerprint the deployment.
+    return {"status": "online"}
+
+
+@router.get("/status/detail")
+def status_detail(user: dict = Depends(require_user)):
     return {
         "status": "online",
         "llm_engine": active_llm[0] if active_llm else "None configured",
