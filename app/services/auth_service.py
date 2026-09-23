@@ -15,6 +15,9 @@ import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import redis
+
+from app.core import redis_sessions
 from app.core.config import settings
 from app.core.database import get_connection
 
@@ -87,15 +90,49 @@ def authenticate(username: str, password: str) -> str | None:
             (token, row["id"], now.isoformat(), expires_at.isoformat()),
         )
         conn.commit()
-        return token
-    finally:
+    except Exception:
         conn.close()
+        raise
+    conn.close()
+
+    # Publish the session to the shared store. Fail-closed: if this cannot
+    # succeed the login is not completed and the durable row is rolled back.
+    try:
+        redis_sessions.create_session(token, row["id"], now, expires_at)
+    except redis.RedisError:
+        rollback = get_connection()
+        try:
+            rollback.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+            rollback.commit()
+        finally:
+            rollback.close()
+        raise
+    return token
 
 
 def resolve_user(token: str) -> dict | None:
-    """Resolve a bearer token to ``{user_id, username, session_id}`` or ``None``."""
+    """Resolve a bearer token to ``{user_id, username, session_id}`` or ``None``.
+
+    The Redis session store is authoritative for *live* sessions (any instance
+    in a multi-instance deployment resolves the same token). A miss is an auth
+    failure. If Redis is unreachable this raises ``redis.RedisError`` — the
+    API layer maps that to a fail-closed 503.
+    """
     if not token:
         return None
+
+    session = redis_sessions.get_session(token)
+    if session is None:
+        # No live session (TTL expired or revoked elsewhere). Remove any
+        # stale durable row so the table stays honest.
+        conn = get_connection()
+        try:
+            conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+            conn.commit()
+        finally:
+            conn.close()
+        return None
+
     conn = get_connection()
     try:
         row = conn.execute(
@@ -108,6 +145,7 @@ def resolve_user(token: str) -> dict | None:
             (token,),
         ).fetchone()
         if not row:
+            redis_sessions.delete_session(token)
             return None
 
         # Reject expired sessions. Rows created before expiry existed have a
@@ -142,7 +180,7 @@ def resolve_user(token: str) -> dict | None:
 
 
 def revoke_token(token: str) -> None:
-    """Remove a session token (logout)."""
+    """Remove a session token (logout) from the durable store and Redis."""
     if not token:
         return
     conn = get_connection()
@@ -151,6 +189,7 @@ def revoke_token(token: str) -> None:
         conn.commit()
     finally:
         conn.close()
+    redis_sessions.delete_session(token)
 
 
 def username_for_user_id(user_id: int | None) -> str | None:

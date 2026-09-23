@@ -1,5 +1,6 @@
 import logging
 
+import redis
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
@@ -9,6 +10,8 @@ from app.services import auth_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
+
+SESSION_STORE_UNAVAILABLE = "Session store temporarily unavailable. Please try again."
 
 
 class Credentials(BaseModel):
@@ -61,7 +64,13 @@ def require_user(request: Request) -> dict:
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required.")
 
-    user = auth_service.resolve_user(token)
+    try:
+        user = auth_service.resolve_user(token)
+    except redis.RedisError:
+        # Fail-closed: without the shared session store we cannot verify
+        # identity, so the request is refused rather than downgraded.
+        logger.warning("session store unavailable; refusing authenticated request")
+        raise HTTPException(status_code=503, detail=SESSION_STORE_UNAVAILABLE) from None
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid or expired session.")
     return user
@@ -112,7 +121,11 @@ def register(payload: Credentials, response: Response, request: Request, _rl=Dep
             ),
         ) from None
 
-    token = auth_service.authenticate(payload.username, payload.password)
+    try:
+        token = auth_service.authenticate(payload.username, payload.password)
+    except redis.RedisError:
+        logger.exception("register completed in DB but session store is unavailable")
+        raise HTTPException(status_code=503, detail=SESSION_STORE_UNAVAILABLE) from None
     if token is None:
         raise HTTPException(status_code=500, detail="Account created but login failed.")
     set_auth_cookie(response, token)
@@ -123,7 +136,11 @@ def register(payload: Credentials, response: Response, request: Request, _rl=Dep
 @router.post("/login")
 def login(payload: Credentials, response: Response, request: Request, _rl=Depends(_enforce_login_limit)):
     ip = client_ip(request)
-    token = auth_service.authenticate(payload.username, payload.password)
+    try:
+        token = auth_service.authenticate(payload.username, payload.password)
+    except redis.RedisError:
+        logger.warning("login refused: session store unavailable username=%s ip=%s", payload.username.strip(), ip)
+        raise HTTPException(status_code=503, detail=SESSION_STORE_UNAVAILABLE) from None
     if token is None:
         logger.warning("login failed username=%s ip=%s", payload.username.strip(), ip)
         raise HTTPException(status_code=401, detail="Invalid username or password.")

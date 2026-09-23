@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,15 +8,28 @@ from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.core.config import settings
 from app.core.database import close_pool, initialize_database
+from app.core.redis_client import close_redis, ping_redis
 from app.services.tts_service import cleanup_old_audio_files, ensure_audio_directory
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
+    if ping_redis():
+        logger.info("Redis session/rate-limit store reachable")
+    else:
+        # The process still starts (health checks, /status work), but every
+        # authenticated request fails closed until Redis is reachable.
+        logger.warning(
+            "Redis is unreachable at startup; authentication will fail "
+            "closed until it is available"
+        )
     ensure_audio_directory()
     cleanup_old_audio_files()
     yield
+    close_redis()
     close_pool()
 
 

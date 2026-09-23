@@ -291,6 +291,16 @@ class Settings:
         os.getenv("DATABASE_URL"),
         "postgresql://evoa@127.0.0.1:5432/assistant",
     )
+    # Redis connection string: shared session state + atomic rate limiting
+    # (see app/core/redis_client.py). Local default; deployments set this.
+    REDIS_URL: str = clean_str(
+        os.getenv("REDIS_URL"), "redis://127.0.0.1:6379/0"
+    )
+    # TTL for the shared conversation-context cache (seconds). The database
+    # remains the source of truth; this only bounds the shared cache.
+    CONTEXT_CACHE_TTL_SECONDS: int = clean_int(
+        os.getenv("CONTEXT_CACHE_TTL_SECONDS"), default=86400, minimum=60
+    )
 
 
 settings = Settings()

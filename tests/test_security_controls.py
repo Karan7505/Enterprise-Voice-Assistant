@@ -45,10 +45,8 @@ class SecurityControlTests(unittest.TestCase):
     def setUp(self):
         self._db = TestDatabase()
         self._db.start()
-        session_service._sessions.clear()
 
     def tearDown(self):
-        session_service._sessions.clear()
         self._db.stop()
 
     def _register(self, username="alice", password="password123"):

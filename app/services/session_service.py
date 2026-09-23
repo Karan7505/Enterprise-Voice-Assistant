@@ -2,7 +2,10 @@ import json
 import logging
 import re
 
+import redis
+
 from app.core.config import settings
+from app.core.redis_client import get_redis
 from app.prompts.chat_prompt import build_prompt
 from app.services import action_policy
 from app.services.auth_service import username_for_user_id
@@ -48,36 +51,97 @@ class SessionContext:
         self,
         session_id: str,
         crm_context: dict,
+        chat_history: list[dict[str, str]] | None = None,
     ):
         self.session_id = session_id
         self.crm_context = crm_context
-        # Load history from DB on session creation
-        db_msgs = get_messages(session_id)
-        self.chat_history = [
-            {"role": msg.role, "content": msg.content}
-            for msg in db_msgs
-        ]
+        # Load history from DB on first creation
+        if chat_history is None:
+            db_msgs = get_messages(session_id)
+            chat_history = [
+                {"role": msg.role, "content": msg.content}
+                for msg in db_msgs
+            ]
+        self.chat_history = chat_history
 
 
-_sessions: dict[str, SessionContext] = {}
+# --- shared conversation-context cache (Redis) --------------------------------
+#
+# Conversation state used to live in an unbounded in-process dict. It is now a
+# bounded, TTL-managed cache in the shared store so any instance can serve the
+# same user. The database remains the source of truth: a cache miss simply
+# rebuilds the context from `chat_history` + `memories`, so a Redis outage
+# costs a rebuild, not correctness.
+
+CTX_KEY_TEMPLATE = "ctx:{session_id}"
+MAX_CACHED_HISTORY = 200  # entries; the prompt window only uses a fraction
+MAX_CTX_BYTES = 128 * 1024
+
+
+def _ctx_key(session_id: str) -> str:
+    return CTX_KEY_TEMPLATE.format(session_id=session_id)
+
+
+def _ctx_load(session_id: str) -> SessionContext | None:
+    try:
+        raw = get_redis().get(_ctx_key(session_id))
+    except redis.RedisError:
+        return None
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+        return SessionContext(
+            session_id=payload["session_id"],
+            crm_context=payload["crm_context"],
+            chat_history=payload["chat_history"],
+        )
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def _ctx_save(session_id: str, ctx: SessionContext) -> None:
+    try:
+        payload = json.dumps(
+            {
+                "session_id": session_id,
+                "crm_context": ctx.crm_context,
+                "chat_history": ctx.chat_history[-MAX_CACHED_HISTORY:],
+            }
+        )
+        if len(payload.encode("utf-8")) > MAX_CTX_BYTES:
+            return  # oversized: skip caching; the DB rebuild covers it
+        get_redis().set(
+            _ctx_key(session_id),
+            payload,
+            ex=settings.CONTEXT_CACHE_TTL_SECONDS,
+        )
+    except (redis.RedisError, TypeError, ValueError):
+        logger.debug("conversation-context cache write skipped (cache only)")
+
+
+def _ctx_drop(session_id: str) -> None:
+    try:
+        get_redis().delete(_ctx_key(session_id))
+    except redis.RedisError:
+        logger.debug("conversation-context cache drop skipped (cache only)")
 
 
 def get_session(
     user_message: str = "",
     session_id: str = DEFAULT_SESSION_ID,
 ) -> SessionContext:
-    if session_id not in _sessions:
-        crm_context = build_context(
-            user_message=user_message,
+    ctx = _ctx_load(session_id)
+    if ctx is None:
+        ctx = SessionContext(
             session_id=session_id,
+            crm_context=build_context(
+                user_message=user_message,
+                session_id=session_id,
+            ),
         )
-
-        _sessions[session_id] = SessionContext(
-            session_id=session_id,
-            crm_context=crm_context,
-        )
-
-    return _sessions[session_id]
+        _ctx_save(session_id, ctx)
+    return ctx
 
 
 def update_memories(
@@ -93,6 +157,7 @@ def update_memories(
         memories,
         session.session_id,
     )
+    _ctx_save(session.session_id, session)
 
 
 def _user_id_from_session(session_id: str) -> int | None:
@@ -193,6 +258,7 @@ def process_message(
                 mode="voice" if mode == "voice" else "text",
             )
             add_message("assistant", reply, session.session_id)
+            _ctx_save(session.session_id, session)
             return reply
         # Not a yes/no: drop the stale staged action and continue with a new turn.
         action_policy.clear_pending_action(session_id)
@@ -323,6 +389,7 @@ def process_message(
         new_memories,
     )
 
+    _ctx_save(session.session_id, session)
     return reply
 
 
@@ -331,8 +398,7 @@ def clear_chat_history(
 ):
     """Clears ONLY conversation messages, preserving extracted long-term memories."""
     clear_messages(session_id)
-    if session_id in _sessions:
-        _sessions[session_id].chat_history = []
+    _ctx_drop(session_id)
 
 
 def clear_memory_data(
@@ -340,17 +406,13 @@ def clear_memory_data(
 ):
     """Clears ONLY extracted long-term memories, preserving conversation messages."""
     clear_memories(session_id)
-    if session_id in _sessions:
-        _sessions[session_id].crm_context = {}
+    _ctx_drop(session_id)
 
 
 def clear_session(
     session_id: str = DEFAULT_SESSION_ID,
 ):
     """Clears both conversation messages and extracted memories."""
-    _sessions.pop(
-        session_id,
-        None,
-    )
+    _ctx_drop(session_id)
     clear_memories(session_id)
     clear_messages(session_id)

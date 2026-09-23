@@ -17,10 +17,15 @@ import uuid
 import psycopg2
 
 from app.core import database
+from app.core import redis_client
 
 ADMIN_URL = os.environ.get(
     "PG_ADMIN_URL", "postgresql://evoa@127.0.0.1:5432/postgres"
 )
+
+# The local staging Redis is dedicated to this deployment; the suite flushes
+# it per test so sessions, rate-limit buckets, and context caches start clean.
+# In CI a fresh Redis service per run provides the same isolation.
 
 
 def _url_for_db(url: str, dbname: str) -> str:
@@ -48,6 +53,9 @@ class TestDatabase:
 
         os.environ["DATABASE_URL"] = _url_for_db(ADMIN_URL, self.name)
         database.initialize_database()
+
+        redis_client.close_redis()
+        redis_client.get_redis().flushdb()
 
     def stop(self) -> None:
         database.close_pool()
