@@ -62,6 +62,13 @@ class BaseCRM(ABC):
             return None
         return self.find_contact(name) or self.find_group(name)
 
+    async def resolve_async(self, name: str) -> Contact | None:
+        """Async resolution. The default runs the sync resolver off the
+        event loop; HTTP-backed providers override with a native async path."""
+        import asyncio
+
+        return await asyncio.to_thread(self.resolve, name)
+
 
 class DirectoryCRM(BaseCRM):
     """In-memory reference CRM.
@@ -189,7 +196,7 @@ class RestCRM(BaseCRM):
 
         # The list of items may be top-level, nested under a configured key, or
         # a common envelope such as {"data": [...]} / {"results": [...]} /
-        # {"contacts": [...]}.
+        # {"contacts": [...]} / {"items": [...]} / {"records": [...]}.
         if isinstance(payload, list):
             return payload
         if isinstance(payload, dict):
@@ -198,6 +205,70 @@ class RestCRM(BaseCRM):
                 if isinstance(value, list):
                     return value
         return []
+
+    @staticmethod
+    def _extract_items(s, payload) -> list:
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            for key in (s.CRM_REST_RESULTS_KEY, "data", "results", "contacts", "items", "records"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return value
+        return []
+
+    async def resolve_async(self, name: str) -> Contact | None:
+        """Native async resolution: one HTTP search, person-first matching.
+
+        Bounded by the CRM timebox (5 s) and the provider circuit breaker.
+        """
+        import httpx
+
+        from app.core import resilience
+        from app.core.config import settings
+
+        s = self._s
+        needle = self._norm(name)
+        if not needle or not s.CRM_REST_BASE_URL:
+            return None
+        timeout = settings.CRM_TIMEOUT_SECONDS
+
+        url = s.CRM_REST_BASE_URL + s.CRM_REST_SEARCH_PATH
+        if s.CRM_REST_QUERY_PARAM:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}{urllib.parse.urlencode({s.CRM_REST_QUERY_PARAM: name})}"
+        headers = {"Accept": "application/json"}
+        if s.CRM_REST_API_KEY:
+            scheme = f"{s.CRM_REST_AUTH_SCHEME} " if s.CRM_REST_AUTH_SCHEME else ""
+            headers[s.CRM_REST_AUTH_HEADER] = f"{scheme}{s.CRM_REST_API_KEY}"
+
+        breaker = resilience.get_breaker("crm")
+
+        async def _fetch():
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(url, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+
+        try:
+            payload = await resilience.timebox(
+                resilience.call_with_breaker(breaker, _fetch),
+                timeout,
+                "CRM",
+            )
+        except Exception as exc:
+            self.logger.warning("CRM async search failed for %r: %s", name, exc)
+            return None
+
+        items = self._extract_items(s, payload)
+        for kind in ("person", "group"):
+            for item in items:
+                contact = self._map_item(item)
+                if contact is None or contact.kind != kind:
+                    continue
+                if needle in self._norm(contact.name) or self._norm(contact.name) in needle:
+                    return contact
+        return None
 
     def _norm(self, value: str) -> str:
         return " ".join(value.lower().split())

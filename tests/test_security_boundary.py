@@ -13,9 +13,10 @@ called and nothing real is sent:
     revokes the token and clears the cookie.
 """
 
+import asyncio
 import json
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from pg_test_support import TestDatabase
 from app.api.chat import _own_audio_file
@@ -49,6 +50,9 @@ class _StubCRM:
                 return contact
         return None
 
+    async def resolve_async(self, name):
+        return self.resolve(name)
+
 
 RAHUL = Contact(name="Rahul", phone="+919812345678")
 
@@ -67,6 +71,7 @@ class _BaseBoundary(unittest.TestCase):
     def _whatsapp_stub(self):
         wa = MagicMock()
         wa.send_text.return_value = ActionResult.ok("I've sent the WhatsApp message.")
+        wa.send_text_async = AsyncMock(return_value=ActionResult.ok("I've sent the WhatsApp message."))
         return wa
 
     def _audit_rows(self, user_id):
@@ -226,9 +231,9 @@ class PromptInjectionBoundaryTest(_BaseBoundary):
              patch.object(orchestrator, "get_whatsapp_connector", return_value=wa), \
              patch.object(session_service, "generate",
                           return_value=_canned_action_reply(injected)):
-            session_service.process_message("what's the weather", sid, mode="text")
+            asyncio.run(session_service.process_message("what's the weather", sid, mode="text"))
         get_crm.assert_not_called()
-        wa.send_text.assert_not_called()
+        wa.send_text_async.assert_not_called()
         rows = self._audit_rows(user["id"])
         self.assertTrue(
             any(r["outcome"] == "denied_policy" for r in rows),
@@ -247,9 +252,9 @@ class PromptInjectionBoundaryTest(_BaseBoundary):
              patch.object(orchestrator, "get_whatsapp_connector", return_value=wa), \
              patch.object(session_service, "generate",
                           return_value=_canned_action_reply(injected)):
-            first = session_service.process_message("summarize my inbox", sid, mode="text")
+            first = asyncio.run(session_service.process_message("summarize my inbox", sid, mode="text"))
         # The action is staged for an explicit yes, not sent immediately.
-        wa.send_text.assert_not_called()
+        wa.send_text_async.assert_not_called()
         self.assertIn("shall I", first)
 
     def test_injected_action_is_bounded_by_hourly_cap(self):
@@ -265,9 +270,9 @@ class PromptInjectionBoundaryTest(_BaseBoundary):
              patch.object(orchestrator, "get_whatsapp_connector", return_value=wa), \
              patch.object(session_service, "generate",
                           return_value=_canned_action_reply(injected)):
-            session_service.process_message("send", sid, mode="text")  # consumes cap
-            second = session_service.process_message("send", sid, mode="text")  # capped
-        self.assertEqual(wa.send_text.call_count, 1)
+            asyncio.run(session_service.process_message("send", sid, mode="text"))  # consumes cap
+            second = asyncio.run(session_service.process_message("send", sid, mode="text"))  # capped
+        self.assertEqual(wa.send_text_async.call_count, 1)
         self.assertIn("hourly", second.lower())
         outcomes = [r["outcome"] for r in self._audit_rows(user["id"])]
         self.assertIn("rate_limited", outcomes)

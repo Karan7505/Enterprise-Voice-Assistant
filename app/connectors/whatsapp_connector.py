@@ -127,6 +127,94 @@ class WhatsAppConnector:
         except Exception:
             return exc.reason if getattr(exc, "reason", None) else ""
 
+    async def send_text_async(self, to: str, message: str) -> ActionResult:
+        """Async twin of :meth:`send_text` (httpx) for route handlers.
+
+        Bounded by the WhatsApp timebox (10 s) and the provider circuit
+        breaker; error mapping mirrors the sync path.
+        """
+        if not self.is_configured():
+            return ActionResult.failure(
+                ActionCode.NOT_CONFIGURED,
+                "WhatsApp isn't configured yet, so I couldn't send the message.",
+            )
+        if not to or not to.strip():
+            return ActionResult.failure(
+                ActionCode.MISSING_FIELDS,
+                "I don't have a WhatsApp number to send to.",
+            )
+        if not message or not message.strip():
+            return ActionResult.failure(
+                ActionCode.MISSING_FIELDS,
+                "There's no message content to send.",
+            )
+
+        import httpx
+
+        from app.core import resilience
+
+        recipient = to.strip().lstrip("+")
+        endpoint = (
+            "https://graph.facebook.com"
+            f"/{self.graph_version}/{urllib.parse.quote(self.phone_number_id)}/messages"
+        )
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient,
+            "type": "text",
+            "text": {"body": message},
+        }
+
+        async def _call():
+            async with httpx.AsyncClient(timeout=settings.WHATSAPP_TIMEOUT_SECONDS) as client:
+                resp = await client.post(
+                    endpoint,
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self.token}"},
+                )
+                if resp.status_code >= 400:
+                    raise _WhatsAppHTTPError(resp.status_code, resp.text[:300])
+                try:
+                    data = resp.json() if resp.content else {}
+                except ValueError:
+                    data = {}
+                return (data.get("messages") or [{}])[0].get("id")
+
+        breaker = resilience.get_breaker("whatsapp")
+        try:
+            message_id = await resilience.timebox(
+                resilience.call_with_breaker(breaker, _call),
+                settings.WHATSAPP_TIMEOUT_SECONDS,
+                "WhatsApp",
+            )
+            return ActionResult.ok(
+                "I've sent the WhatsApp message.",
+                details={"message_id": message_id, "to": recipient},
+            )
+        except _WhatsAppHTTPError as exc:
+            # A clean HTTP rejection means the provider answered: healthy,
+            # so the breaker resets rather than tripping.
+            breaker.on_success()
+            logger.warning("WhatsApp request rejected (HTTP %s): %s", exc.code, exc.detail)
+            return ActionResult.failure(
+                ActionCode.PROVIDER_REJECTED,
+                "WhatsApp declined the message, so it was not sent.",
+                details={"status": exc.code},
+            )
+        except (httpx.HTTPError, resilience.ProviderTimeoutError, resilience.CircuitOpenError, OSError) as exc:
+            logger.exception("WhatsApp async request failed: %s", exc)
+            return ActionResult.failure(
+                ActionCode.EXECUTION_ERROR,
+                "I couldn't reach WhatsApp right now, so the message wasn't sent.",
+            )
+
+
+class _WhatsAppHTTPError(Exception):
+    def __init__(self, code: int, detail: str):
+        super().__init__(f"HTTP {code}")
+        self.code = code
+        self.detail = detail
+
 
 _whatsapp_instance: WhatsAppConnector | None = None
 

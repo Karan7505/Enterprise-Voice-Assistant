@@ -1,4 +1,6 @@
+import asyncio
 import unittest
+from unittest import mock
 from unittest.mock import patch
 
 from app.api.chat import ChatRequest, chat
@@ -8,7 +10,7 @@ FAKE_USER = {"user_id": 1, "username": "test", "session_id": "user:1"}
 
 class ChatResponseModeTests(unittest.TestCase):
     @patch("app.api.chat.get_all_memories", return_value={"name": "Karan"})
-    @patch("app.api.chat.generate_speech")
+    @patch("app.api.chat.generate_speech_async")
     @patch("app.api.chat.process_message", return_value="Hello, Karan.")
     def test_text_mode_skips_tts_and_preserves_memory(
         self,
@@ -16,9 +18,8 @@ class ChatResponseModeTests(unittest.TestCase):
         generate_speech,
         get_all_memories,
     ):
-        response = chat(
-            ChatRequest(message="Hello", response_mode="text"),
-            user=FAKE_USER,
+        response = asyncio.run(
+            chat(ChatRequest(message="Hello", response_mode="text"), user=FAKE_USER)
         )
 
         self.assertEqual(
@@ -36,19 +37,20 @@ class ChatResponseModeTests(unittest.TestCase):
         get_all_memories.assert_called_once_with("user:1")
 
     @patch("app.api.chat.get_all_memories", return_value={"name": "Karan"})
-    @patch("app.api.chat.generate_speech", return_value="reply.mp3")
+    @patch("app.api.chat.generate_speech_async", return_value="reply.mp3")
+    @patch("app.api.chat.store_audio")
     @patch("app.api.chat._record_audio_file")
     @patch("app.api.chat.process_message", return_value="Hello, Karan.")
     def test_voice_mode_generates_tts_with_the_same_memory_flow(
         self,
         process_message,
         _record_audio,
+        store_audio,
         generate_speech,
         get_all_memories,
     ):
-        response = chat(
-            ChatRequest(message="Hello", response_mode="voice"),
-            user=FAKE_USER,
+        response = asyncio.run(
+            chat(ChatRequest(message="Hello", response_mode="voice"), user=FAKE_USER)
         )
 
         self.assertEqual(
@@ -64,6 +66,7 @@ class ChatResponseModeTests(unittest.TestCase):
         )
         generate_speech.assert_called_once_with("Hello, Karan.")
         get_all_memories.assert_called_once_with("user:1")
+        store_audio.assert_called_once_with("user:1", "reply.mp3", mock.ANY)
         _record_audio.assert_called_once_with("reply.mp3", "user:1")
 
 

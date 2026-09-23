@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import redis
@@ -52,20 +53,21 @@ def clear_auth_cookie(response: Response) -> None:
     )
 
 
-def require_user(request: Request) -> dict:
+async def require_user(request: Request) -> dict:
     """FastAPI dependency: resolve the session token (header or cookie) to a
     user, else 401.
 
     Returns ``{user_id, username, session_id}``. ``session_id`` is the single
     scope used for chat history and long-term memory, so data is isolated per
-    authenticated user.
+    authenticated user. The Redis+PostgreSQL resolution runs off the event
+    loop so authenticated endpoints stay non-blocking.
     """
     token = _token_from_request(request)
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required.")
 
     try:
-        user = auth_service.resolve_user(token)
+        user = await asyncio.to_thread(auth_service.resolve_user, token)
     except redis.RedisError:
         # Fail-closed: without the shared session store we cannot verify
         # identity, so the request is refused rather than downgraded.

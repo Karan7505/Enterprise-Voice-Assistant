@@ -1,6 +1,7 @@
+import asyncio
 import json
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from pydantic import ValidationError
 
@@ -30,6 +31,9 @@ class _StubCRM:
                 return contact
         return None
 
+    async def resolve_async(self, name):
+        return self.resolve(name)
+
 
 def _canned_action_reply(action=None, reply="On it."):
     return json.dumps(
@@ -55,6 +59,7 @@ class SecurityControlTests(unittest.TestCase):
     def _whatsapp_stub(self):
         wa = MagicMock()
         wa.send_text.return_value = ActionResult.ok("I've sent the WhatsApp message.")
+        wa.send_text_async = AsyncMock(return_value=ActionResult.ok("I've sent the WhatsApp message."))
         return wa
 
     # --- M-1: token expiry -------------------------------------------------
@@ -97,11 +102,11 @@ class SecurityControlTests(unittest.TestCase):
              patch.object(orchestrator, "get_whatsapp_connector", return_value=wa), \
              patch.object(session_service, "generate",
                           return_value=_canned_action_reply(ACTION)):
-            reply = session_service.process_message(
+            reply = asyncio.run(session_service.process_message(
                 "Send Rahul a WhatsApp: Meeting at 4", session_id, mode="text"
-            )
+            ))
         get_crm.assert_not_called()
-        wa.send_text.assert_not_called()
+        wa.send_text_async.assert_not_called()
         self.assertIn("isn't enabled", reply)
 
     # --- H-1/H-2: allowlisted user must confirm before a real send --------
@@ -116,15 +121,15 @@ class SecurityControlTests(unittest.TestCase):
              patch.object(orchestrator, "get_whatsapp_connector", return_value=wa), \
              patch.object(session_service, "generate",
                           return_value=_canned_action_reply(ACTION)):
-            first = session_service.process_message(
+            first = asyncio.run(session_service.process_message(
                 "Send Rahul a WhatsApp: Meeting at 4", session_id, mode="text"
-            )
+            ))
             self.assertIn("shall I", first)
-            wa.send_text.assert_not_called()
+            wa.send_text_async.assert_not_called()
 
-            second = session_service.process_message("yes", session_id, mode="text")
+            second = asyncio.run(session_service.process_message("yes", session_id, mode="text"))
         self.assertIn("sent", second)
-        wa.send_text.assert_called_once_with("+919812345678", "Meeting at 4")
+        wa.send_text_async.assert_called_once_with("+919812345678", "Meeting at 4")
 
     def test_confirmation_reject_does_not_send(self):
         user = self._register("alice")
@@ -137,11 +142,11 @@ class SecurityControlTests(unittest.TestCase):
              patch.object(orchestrator, "get_whatsapp_connector", return_value=wa), \
              patch.object(session_service, "generate",
                           return_value=_canned_action_reply(ACTION)):
-            session_service.process_message(
+            asyncio.run(session_service.process_message(
                 "Send Rahul a WhatsApp: Meeting at 4", session_id, mode="text"
-            )
-            second = session_service.process_message("no", session_id, mode="text")
-        wa.send_text.assert_not_called()
+            ))
+            second = asyncio.run(session_service.process_message("no", session_id, mode="text"))
+        wa.send_text_async.assert_not_called()
         self.assertIn("cancel", second.lower())
 
     # --- H-1: a user outside the allowlist can never send ------------------
@@ -155,11 +160,11 @@ class SecurityControlTests(unittest.TestCase):
              patch.object(orchestrator, "get_whatsapp_connector", return_value=wa), \
              patch.object(session_service, "generate",
                           return_value=_canned_action_reply(ACTION)):
-            reply = session_service.process_message(
+            reply = asyncio.run(session_service.process_message(
                 "Send Rahul a WhatsApp: Meeting at 4", session_id, mode="text"
-            )
+            ))
         get_crm.assert_not_called()
-        wa.send_text.assert_not_called()
+        wa.send_text_async.assert_not_called()
         self.assertIn("isn't enabled for your account", reply)
 
     # --- H-1: trusted single-turn mode still sends exactly once ------------
@@ -174,11 +179,11 @@ class SecurityControlTests(unittest.TestCase):
              patch.object(orchestrator, "get_whatsapp_connector", return_value=wa), \
              patch.object(session_service, "generate",
                           return_value=_canned_action_reply(ACTION)):
-            reply = session_service.process_message(
+            reply = asyncio.run(session_service.process_message(
                 "Send Rahul a WhatsApp: Meeting at 4", session_id, mode="text"
-            )
+            ))
         self.assertIn("sent", reply)
-        wa.send_text.assert_called_once_with("+919812345678", "Meeting at 4")
+        wa.send_text_async.assert_called_once_with("+919812345678", "Meeting at 4")
 
     # --- H-2: confirmation classification is fail-safe ---------------------
     def test_confirmations_classified(self):
@@ -248,9 +253,9 @@ class SecurityControlTests(unittest.TestCase):
              patch.object(orchestrator, "get_whatsapp_connector", return_value=wa), \
              patch.object(session_service, "generate",
                            return_value=_canned_action_reply(ACTION)):
-            session_service.process_message(
+            asyncio.run(session_service.process_message(
                 "Send Rahul a WhatsApp: Meeting at 4", session_id, mode="text"
-            )
+            ))
         rows = self._audit_rows(user["id"])
         self.assertTrue(
             any(r["outcome"] == "success" and r["recipient"] == "Rahul" for r in rows),

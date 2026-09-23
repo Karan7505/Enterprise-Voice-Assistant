@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -18,7 +19,13 @@ from app.services.memory_service import (
     delete_memories,
     clear_memories,
 )
-from app.connectors.orchestrator import BusinessAction, execute_action, run_business_action
+from app.connectors.orchestrator import (
+    BusinessAction,
+    execute_action,
+    execute_action_async,
+    run_business_action,
+    run_business_action_async,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -183,15 +190,16 @@ def _confirmation_prompt(action: BusinessAction) -> str:
     return line + " - shall I? Say yes to send, or no to cancel."
 
 
-def _run_and_audit(
+async def _run_and_audit(
     user_id: int | None,
     username: str | None,
     action: BusinessAction,
     ack: str = "",
 ) -> str:
     """Execute a policy-cleared action and record it in the audit trail."""
-    result = execute_action(action)
-    action_policy.record_action(
+    result = await execute_action_async(action)
+    await asyncio.to_thread(
+        action_policy.record_action,
         user_id,
         username,
         action.action,
@@ -205,40 +213,51 @@ def _run_and_audit(
     return f"{ack_stripped} {result.message}".strip() if ack_stripped else result.message
 
 
-def process_message(
+async def process_message(
     message: str,
     session_id: str = DEFAULT_SESSION_ID,
     mode: str = "text",
 ):
-    session = get_session(
-        user_message=message,
-        session_id=session_id,
+    # Blocking I/O (PostgreSQL, the Redis ctx cache) runs off the event loop;
+    # provider calls below are natively async.
+    session = await asyncio.to_thread(
+        get_session, user_message=message, session_id=session_id
     )
 
     user_id = _user_id_from_session(session_id)
-    username = username_for_user_id(user_id) if user_id is not None else None
+    username = (
+        await asyncio.to_thread(username_for_user_id, user_id)
+        if user_id is not None
+        else None
+    )
 
     # An explicit confirm/cancel for a previously staged send takes precedence
     # over a fresh LLM turn. Anything that isn't a clear yes/no is treated as a
     # new request, which discards the staged action (fail-safe: no accidental send).
-    pending = action_policy.get_pending_action(session_id)
+    pending = await asyncio.to_thread(action_policy.get_pending_action, session_id)
     if pending is not None:
         decision = action_policy.classify_confirmation(message)
         if decision in ("yes", "no"):
             action = BusinessAction.from_dict(pending)
-            action_policy.clear_pending_action(session_id)
+            await asyncio.to_thread(action_policy.clear_pending_action, session_id)
             if decision == "yes" and action is not None and action.is_complete():
-                allowed, reason = action_policy.is_enabled_for(username)
+                allowed, reason = await asyncio.to_thread(
+                    action_policy.is_enabled_for, username
+                )
                 if not allowed:
-                    action_policy.record_action(
+                    await asyncio.to_thread(
+                        action_policy.record_action,
                         user_id, username, action.action, action.recipient,
                         action.subject, action.message, "denied_policy", reason,
                     )
                     reply = reason
                 else:
-                    cap_ok, _retry = action_policy.hourly_cap_ok(user_id)
+                    cap_ok, _retry = await asyncio.to_thread(
+                        action_policy.hourly_cap_ok, user_id
+                    )
                     if not cap_ok:
-                        action_policy.record_action(
+                        await asyncio.to_thread(
+                            action_policy.record_action,
                             user_id, username, action.action, action.recipient,
                             action.subject, action.message, "rate_limited",
                             "hourly cap reached",
@@ -248,20 +267,21 @@ def process_message(
                             "Please try again later."
                         )
                     else:
-                        reply = _run_and_audit(user_id, username, action)
+                        reply = await _run_and_audit(user_id, username, action)
             else:
                 reply = "Okay, I've cancelled that. Nothing was sent."
             session.chat_history.append({"role": "user", "content": message})
             session.chat_history.append({"role": "assistant", "content": reply})
-            add_message(
+            await asyncio.to_thread(
+                add_message,
                 "user", message, session.session_id,
                 mode="voice" if mode == "voice" else "text",
             )
-            add_message("assistant", reply, session.session_id)
-            _ctx_save(session.session_id, session)
+            await asyncio.to_thread(add_message, "assistant", reply, session.session_id)
+            await asyncio.to_thread(_ctx_save, session.session_id, session)
             return reply
         # Not a yes/no: drop the stale staged action and continue with a new turn.
-        action_policy.clear_pending_action(session_id)
+        await asyncio.to_thread(action_policy.clear_pending_action, session_id)
 
     # Task 3: Send only the most recent N messages for conversation context
     max_history = settings.MAX_HISTORY_MESSAGES
@@ -284,7 +304,7 @@ def process_message(
         message=message,
     )
 
-    raw_response = generate(prompt)
+    raw_response = await generate(prompt)
 
     try:
         data = extract_json(raw_response)
@@ -322,21 +342,29 @@ def process_message(
     if action_data is not None:
         action = BusinessAction.from_dict(action_data)
         if action is not None and action.is_complete():
-            allowed, reason = action_policy.is_enabled_for(username)
+            allowed, reason = await asyncio.to_thread(
+                action_policy.is_enabled_for, username
+            )
             if not allowed:
-                action_policy.record_action(
+                await asyncio.to_thread(
+                    action_policy.record_action,
                     user_id, username, action.action, action.recipient,
                     action.subject, action.message, "denied_policy", reason,
                 )
                 reply = f"{reply} {reason}".strip()
             elif settings.BUSINESS_ACTION_REQUIRE_CONFIRMATION:
                 # Stage the action and require an explicit yes on the next turn.
-                action_policy.store_pending_action(session_id, action_data)
+                await asyncio.to_thread(
+                    action_policy.store_pending_action, session_id, action_data
+                )
                 reply = _confirmation_prompt(action)
             else:
-                cap_ok, _retry = action_policy.hourly_cap_ok(user_id)
+                cap_ok, _retry = await asyncio.to_thread(
+                    action_policy.hourly_cap_ok, user_id
+                )
                 if not cap_ok:
-                    action_policy.record_action(
+                    await asyncio.to_thread(
+                        action_policy.record_action,
                         user_id, username, action.action, action.recipient,
                         action.subject, action.message, "rate_limited",
                         "hourly cap reached",
@@ -346,14 +374,14 @@ def process_message(
                         "Please try again later."
                     ).strip()
                 else:
-                    action_policy.clear_pending_action(session_id)
-                    reply = _run_and_audit(user_id, username, action, ack=reply)
+                    await asyncio.to_thread(action_policy.clear_pending_action, session_id)
+                    reply = await _run_and_audit(user_id, username, action, ack=reply)
         else:
-            reply = run_business_action(reply, action_data)
+            reply = await run_business_action_async(reply, action_data)
 
     # Process explicit deletions if requested by user
     if delete_keys:
-        delete_memories(delete_keys, session.session_id)
+        await asyncio.to_thread(delete_memories, delete_keys, session.session_id)
         for k in delete_keys:
             session.crm_context.pop(k, None)
 
@@ -371,25 +399,28 @@ def process_message(
         }
     )
 
-    add_message(
+    await asyncio.to_thread(
+        add_message,
         "user",
         message,
         session.session_id,
         mode="voice" if mode == "voice" else "text",
     )
 
-    add_message(
+    await asyncio.to_thread(
+        add_message,
         "assistant",
         reply,
         session.session_id,
     )
 
-    update_memories(
+    await asyncio.to_thread(
+        update_memories,
         session,
         new_memories,
     )
 
-    _ctx_save(session.session_id, session)
+    await asyncio.to_thread(_ctx_save, session.session_id, session)
     return reply
 
 

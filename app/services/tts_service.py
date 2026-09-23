@@ -1,8 +1,10 @@
+import asyncio
 import logging
 import time
 import uuid
 from pathlib import Path
 
+from app.core import resilience
 from app.core.config import settings
 
 AUDIO_DIR = Path(settings.AUDIO_DIR).resolve()
@@ -178,6 +180,142 @@ def generate_speech(text: str) -> str:
             "TTS success provider=gTTS model=gtts voice=en-default file=%s",
             filename,
         )
+        return filename
+    except Exception:
+        cleanup_partial_audio_file(filepath)
+        logger.exception("gTTS fallback failed")
+        raise
+
+
+# --- async provider paths (route handlers) -----------------------------------
+#
+# The sync functions above remain for direct/legacy use and unit tests; the
+# HTTP voice path uses these so provider latency never blocks the event loop.
+# Each is bounded by the 15 s TTS timebox, retried up to 2 attempts, and
+# guarded by a per-provider circuit breaker.
+
+
+def _tts_retry_on():
+    return (
+        asyncio.TimeoutError,
+        resilience.ProviderTimeoutError,
+        ConnectionError,
+    )
+
+
+@resilience.async_retries(settings.TTS_MAX_RETRIES, _tts_retry_on())
+async def generate_speech_elevenlabs_async(text: str, filepath: Path):
+    from elevenlabs import VoiceSettings
+    from elevenlabs.client import AsyncElevenLabs
+
+    client = AsyncElevenLabs(
+        api_key=settings.ELEVENLABS_API_KEY,
+        httpx_args={"timeout": settings.TTS_TIMEOUT_SECONDS},
+    )
+    audio = await client.text_to_speech.convert(
+        voice_id=settings.ELEVENLABS_VOICE_ID,
+        model_id=settings.ELEVENLABS_MODEL_ID,
+        text=text,
+        voice_settings=VoiceSettings(
+            stability=settings.ELEVENLABS_STABILITY,
+            similarity_boost=settings.ELEVENLABS_SIMILARITY_BOOST,
+            style=settings.ELEVENLABS_STYLE,
+            use_speaker_boost=settings.ELEVENLABS_USE_SPEAKER_BOOST,
+            speed=settings.ELEVENLABS_SPEED,
+        ),
+    )
+    await asyncio.to_thread(_write_chunks, audio, filepath)
+
+
+def _write_chunks(stream, filepath: Path):
+    with open(filepath, "wb") as f:
+        for chunk in stream:
+            if chunk:
+                f.write(chunk)
+
+
+@resilience.async_retries(settings.TTS_MAX_RETRIES, _tts_retry_on())
+async def generate_speech_openai_tts_async(text: str, filepath: Path):
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key=settings.TTS_API_KEY,
+        base_url=settings.TTS_BASE_URL if settings.TTS_BASE_URL else None,
+        timeout=settings.TTS_TIMEOUT_SECONDS,
+    )
+    response = await client.audio.speech.create(
+        input=text,
+        **_build_openai_speech_options(
+            model=settings.TTS_MODEL,
+            voice=settings.TTS_VOICE,
+            speed=settings.TTS_SPEED,
+            instructions=settings.TTS_INSTRUCTIONS,
+        ),
+    )
+    # stream_to_file is blocking; run it off the loop.
+    await asyncio.to_thread(response.stream_to_file, filepath)
+
+
+async def generate_speech_gtts_async(text: str, filepath: Path):
+    # gTTS is a small synchronous library with no async client; its network
+    # call is bounded by the outer timebox.
+    await asyncio.to_thread(generate_speech_gtts, text, filepath)
+
+
+async def generate_speech_async(text: str) -> str:
+    """Async twin of :func:`generate_speech` for route handlers.
+
+    Same provider order (ElevenLabs -> OpenAI-compatible -> gTTS) and the
+    same fail-through behavior; each attempt runs under the TTS timebox and
+    provider circuit breaker.
+    """
+    ensure_audio_directory()
+    filename = f"{uuid.uuid4().hex}.mp3"
+    filepath = AUDIO_DIR / filename
+    box = settings.TTS_TIMEOUT_SECONDS
+
+    if settings.ELEVENLABS_API_KEY and not settings.ELEVENLABS_API_KEY.startswith("your_"):
+        try:
+            logger.info("TTS attempt provider=ElevenLabs model=%s voice=%s", settings.ELEVENLABS_MODEL_ID, settings.ELEVENLABS_VOICE_ID)
+            await resilience.timebox(
+                resilience.call_with_breaker(
+                    resilience.get_breaker("elevenlabs"),
+                    generate_speech_elevenlabs_async, text, filepath,
+                ),
+                box, "ElevenLabs TTS",
+            )
+            logger.info("TTS success provider=ElevenLabs file=%s", filename)
+            return filename
+        except Exception:
+            cleanup_partial_audio_file(filepath)
+            logger.exception("TTS failure provider=ElevenLabs")
+
+    if settings.TTS_API_KEY and not settings.TTS_API_KEY.startswith("your_"):
+        try:
+            logger.info("TTS attempt provider=Custom/OpenAI-compatible model=%s voice=%s", settings.TTS_MODEL, settings.TTS_VOICE)
+            await resilience.timebox(
+                resilience.call_with_breaker(
+                    resilience.get_breaker("openai-tts"),
+                    generate_speech_openai_tts_async, text, filepath,
+                ),
+                box, "OpenAI TTS",
+            )
+            logger.info("TTS success provider=Custom/OpenAI-compatible file=%s", filename)
+            return filename
+        except Exception:
+            cleanup_partial_audio_file(filepath)
+            logger.exception("TTS failure provider=Custom/OpenAI-compatible")
+
+    try:
+        logger.info("TTS attempt provider=gTTS model=gtts voice=en-default")
+        await resilience.timebox(
+            resilience.call_with_breaker(
+                resilience.get_breaker("gtts"),
+                generate_speech_gtts_async, text, filepath,
+            ),
+            box, "gTTS",
+        )
+        logger.info("TTS success provider=gTTS file=%s", filename)
         return filename
     except Exception:
         cleanup_partial_audio_file(filepath)

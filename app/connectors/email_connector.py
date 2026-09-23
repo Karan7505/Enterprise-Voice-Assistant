@@ -100,6 +100,95 @@ class EmailConnector:
                 "I couldn't send the email right now. Please try again.",
             )
 
+    def _build_message(self, recipients: list[str], subject: str, body: str) -> "EmailMessage":
+        message = EmailMessage()
+        message["From"] = self.username
+        message["To"] = ", ".join(recipients)
+        message["Subject"] = subject
+        message.set_content(body)
+        return message
+
+    async def send_async(
+        self,
+        to: str | list[str],
+        subject: str,
+        body: str,
+    ) -> ActionResult:
+        """Async twin of :meth:`send` (aiosmtplib) for route handlers.
+
+        Bounded by the SMTP timebox (10 s) and the provider circuit breaker.
+        """
+        import aiosmtplib
+
+        from app.core import resilience
+
+        recipients = [addr.strip() for addr in (to if isinstance(to, list) else [to])]
+        recipients = [addr for addr in recipients if addr]
+
+        if not self.is_configured():
+            return ActionResult.failure(
+                ActionCode.NOT_CONFIGURED,
+                "Email isn't configured yet, so I couldn't send that.",
+            )
+        if not recipients:
+            return ActionResult.failure(
+                ActionCode.MISSING_FIELDS,
+                "I don't have a valid email address to send to.",
+            )
+        if subject is None or not subject.strip():
+            subject = "Message from JARVIS"
+        if not body or not body.strip():
+            return ActionResult.failure(
+                ActionCode.MISSING_FIELDS,
+                "There's no email content to send.",
+            )
+
+        message = self._build_message(recipients, subject, body)
+        breaker = resilience.get_breaker("smtp")
+
+        async def _send():
+            try:
+                async with aiosmtplib.SMTP(
+                    hostname=self.host,
+                    port=self.port,
+                    start_tls=self.use_tls,
+                    timeout=settings.SMTP_TIMEOUT_SECONDS,
+                ) as server:
+                    if self.username and self.password:
+                        await server.login(self.username, self.password)
+                    await server.send(message)
+            except aiosmtplib.SMTPAuthenticationError as exc:
+                raise _SMTPAuthError(str(exc.smtp_error if hasattr(exc, "smtp_error") else exc)) from exc
+
+        try:
+            await resilience.timebox(
+                resilience.call_with_breaker(breaker, _send),
+                settings.SMTP_TIMEOUT_SECONDS,
+                "SMTP",
+            )
+            return ActionResult.ok(
+                f"I've emailed {', '.join(recipients)}.",
+                details={"to": recipients, "subject": subject},
+            )
+        except _SMTPAuthError as exc:
+            breaker.on_success()  # the server answered; auth failure is not an outage
+            logger.warning("Email authentication failed: %s", exc)
+            return ActionResult.failure(
+                ActionCode.PROVIDER_REJECTED,
+                "The email service rejected the credentials, so it wasn't sent.",
+            )
+        except (aiosmtplib.SMTPException, socket.error, TimeoutError,
+                resilience.ProviderTimeoutError, resilience.CircuitOpenError, OSError) as exc:
+            logger.exception("Email async send failed: %s", exc)
+            return ActionResult.failure(
+                ActionCode.EXECUTION_ERROR,
+                "I couldn't send the email right now. Please try again.",
+            )
+
+
+class _SMTPAuthError(Exception):
+    """Authentication rejected by the SMTP server (provider answered)."""
+
 
 _email_instance: EmailConnector | None = None
 

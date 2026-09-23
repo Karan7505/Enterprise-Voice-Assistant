@@ -1,13 +1,15 @@
+import asyncio
 import logging
 from pathlib import Path
 import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.api.auth import require_user
+from app.services.audio_storage import AudioStoreError, stream_audio, store_audio
 from app.services.session_service import (
     process_message,
     clear_session,
@@ -17,7 +19,7 @@ from app.services.session_service import (
 from app.services.memory_service import get_all_memories
 from app.services.database_chat_history import get_messages
 from app.services.llm_service import LLMError
-from app.services.tts_service import generate_speech
+from app.services.tts_service import generate_speech_async
 from app.core.config import active_llm, active_tts, settings
 from app.core.database import get_connection
 from app.core.rate_limiter import check_rate_limit, client_ip
@@ -44,7 +46,12 @@ class ChatResponse(BaseModel):
 
 
 def _own_audio_file(filename: str, session_id: str) -> bool:
-    """Return True if the generated audio file belongs to this user session."""
+    """Return True if the generated audio file belongs to this user session.
+
+    The lookup is deliberately scoped to the caller's session_id, so a file
+    stored under another user's key (or a raw S3 path guess) is unreachable
+    even though the store itself is shared.
+    """
     conn = get_connection()
     try:
         row = conn.execute(
@@ -69,10 +76,11 @@ def _record_audio_file(filename: str, session_id: str) -> None:
         conn.close()
 
 
-def _chat_rate_limited(user: dict = Depends(require_user)) -> dict:
+async def _chat_rate_limited(user: dict = Depends(require_user)) -> dict:
     """Rate-limit ``/chat`` per authenticated user. Runs only over HTTP, so the
     endpoint function stays free of DB access for direct unit tests."""
-    allowed, retry = check_rate_limit(
+    allowed, retry = await asyncio.to_thread(
+        check_rate_limit,
         "chat", f"user:{user['user_id']}", settings.RATE_LIMIT_CHAT,
         settings.RATE_LIMIT_WINDOW_SECONDS,
     )
@@ -86,7 +94,7 @@ def _chat_rate_limited(user: dict = Depends(require_user)) -> dict:
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest, user: dict = Depends(_chat_rate_limited)):
+async def chat(request: ChatRequest, user: dict = Depends(_chat_rate_limited)):
     session_id = user["session_id"]
 
     # The assistant needs at least one LLM provider. There is no keyless LLM
@@ -102,7 +110,7 @@ def chat(request: ChatRequest, user: dict = Depends(_chat_rate_limited)):
         )
 
     try:
-        reply = process_message(
+        reply = await process_message(
             request.message,
             session_id,
             mode=request.response_mode,
@@ -117,14 +125,29 @@ def chat(request: ChatRequest, user: dict = Depends(_chat_rate_limited)):
     audio_url = ""
     if request.response_mode == "voice":
         try:
-            filename = generate_speech(reply)
+            filename = await generate_speech_async(reply)
             if filename:
-                _record_audio_file(filename, session_id)
+                # Persist into the audio store (S3 in staging/production). A
+                # selected-but-unreachable store is a 503, not a silent drop.
+                try:
+                    await asyncio.to_thread(
+                        store_audio, session_id, filename, AUDIO_DIR / filename
+                    )
+                except AudioStoreError:
+                    logger.exception("audio store unavailable; voice reply cannot be served")
+                    raise HTTPException(
+                        status_code=503,
+                        detail="The assistant's audio service is temporarily unavailable. "
+                        "Please try again in a moment.",
+                    ) from None
+                await asyncio.to_thread(_record_audio_file, filename, session_id)
                 audio_url = f"/audio/{filename}"
+        except HTTPException:
+            raise
         except Exception:
             logger.exception("TTS generation failed; returning the text response without audio")
 
-    memories = get_all_memories(session_id)
+    memories = await asyncio.to_thread(get_all_memories, session_id)
 
     return ChatResponse(
         reply=reply,
@@ -207,19 +230,24 @@ def status_detail(user: dict = Depends(require_user)):
 
 
 @router.get("/audio/{filename}")
-def get_audio(filename: str, user: dict = Depends(require_user)):
+async def get_audio(filename: str, user: dict = Depends(require_user)):
     if not AUDIO_FILENAME_PATTERN.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid audio filename")
 
-    if not _own_audio_file(filename, user["session_id"]):
+    owned = await asyncio.to_thread(_own_audio_file, filename, user["session_id"])
+    if not owned:
         raise HTTPException(status_code=404, detail="Audio file not found")
 
-    file_path = AUDIO_DIR / filename
-    if not file_path.is_file():
-        raise HTTPException(status_code=404, detail="Audio file not found")
+    try:
+        data, _size = await asyncio.to_thread(stream_audio, user["session_id"], filename)
+    except AudioStoreError as exc:
+        if str(exc) == "missing":
+            raise HTTPException(status_code=404, detail="Audio file not found") from None
+        # Store selected but unreachable: fail loudly, never serve stale state.
+        raise HTTPException(status_code=503, detail="The audio service is temporarily unavailable.") from None
 
-    return FileResponse(
-        path=file_path,
+    return Response(
+        content=data,
         media_type="audio/mpeg",
-        filename=filename,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )

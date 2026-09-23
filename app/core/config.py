@@ -301,6 +301,31 @@ class Settings:
     CONTEXT_CACHE_TTL_SECONDS: int = clean_int(
         os.getenv("CONTEXT_CACHE_TTL_SECONDS"), default=86400, minimum=60
     )
+    # S3 audio store. When S3_ENDPOINT_URL is non-empty, generated audio is
+    # stored in the bucket under per-user keys (user-{id}/{filename}) and
+    # served back from S3; the local filesystem is only used as a keyless-dev
+    # fallback (S3_ENDPOINT_URL=""). A non-empty endpoint means S3 is the
+    # selected store, so an unreachable S3 must fail requests (503), not
+    # silently downgrade.
+    S3_ENDPOINT_URL: str = clean_str(
+        os.getenv("S3_ENDPOINT_URL"), "http://127.0.0.1:9000"
+    )
+    S3_BUCKET: str = clean_str(os.getenv("S3_BUCKET"), "assistant-audio")
+    # Local-staging placeholders; deployments inject real credentials.
+    S3_ACCESS_KEY: str = clean_str(os.getenv("S3_ACCESS_KEY"), "evoa-local")
+    S3_SECRET_KEY: str = clean_str(os.getenv("S3_SECRET_KEY"), "evoa-local-secret")
+
+    # Provider resilience (blueprint Change 5): per-provider timeboxes,
+    # retry budgets, and circuit-breaker trip/reset thresholds.
+    LLM_TIMEOUT_SECONDS: float = clean_float(os.getenv("LLM_TIMEOUT_SECONDS"), default=10.0, minimum=1.0)
+    TTS_TIMEOUT_SECONDS: float = clean_float(os.getenv("TTS_TIMEOUT_SECONDS"), default=15.0, minimum=1.0)
+    CRM_TIMEOUT_SECONDS: float = clean_float(os.getenv("CRM_TIMEOUT_SECONDS"), default=5.0, minimum=1.0)
+    WHATSAPP_TIMEOUT_SECONDS: float = clean_float(os.getenv("WHATSAPP_TIMEOUT_SECONDS"), default=10.0, minimum=1.0)
+    SMTP_TIMEOUT_SECONDS: float = clean_float(os.getenv("SMTP_TIMEOUT_SECONDS"), default=10.0, minimum=1.0)
+    LLM_MAX_RETRIES: int = clean_int(os.getenv("LLM_MAX_RETRIES"), default=3, minimum=1)
+    TTS_MAX_RETRIES: int = clean_int(os.getenv("TTS_MAX_RETRIES"), default=2, minimum=1)
+    CIRCUIT_FAIL_MAX: int = clean_int(os.getenv("CIRCUIT_FAIL_MAX"), default=5, minimum=1)
+    CIRCUIT_RESET_SECONDS: float = clean_float(os.getenv("CIRCUIT_RESET_SECONDS"), default=60.0, minimum=1.0)
 
 
 settings = Settings()

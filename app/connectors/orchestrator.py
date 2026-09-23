@@ -161,6 +161,84 @@ def execute_action(business: BusinessAction) -> ActionResult:
     return ActionResult.failure(ActionCode.INVALID_ACTION)
 
 
+async def execute_action_async(business: BusinessAction) -> ActionResult:
+    """Async twin of :func:`execute_action` for route handlers.
+
+    Same resolution and dispatch logic, but CRM lookup, WhatsApp, and email
+    go through their native async paths (httpx / aiosmtplib), so provider
+    latency never blocks the event loop.
+    """
+    if business.action not in SUPPORTED_ACTIONS:
+        return ActionResult.failure(ActionCode.INVALID_ACTION)
+
+    if business.action in _RECIPIENT_ACTIONS:
+        if not business.recipient:
+            return ActionResult.failure(
+                ActionCode.MISSING_FIELDS,
+                "Who should I send this to? Could you give me a name?",
+            )
+
+        if is_ambiguous_recipient(business.recipient):
+            return ActionResult.failure(
+                ActionCode.MISSING_FIELDS,
+                "Which person or group do you mean? Please give me their name.",
+            )
+
+        contact = await get_crm().resolve_async(business.recipient)
+        if contact is None:
+            return ActionResult.failure(
+                ActionCode.RECIPIENT_NOT_FOUND,
+                f'I couldn\'t find "{business.recipient}" in your contacts, so I didn\'t send anything.',
+            )
+
+        if business.action == "whatsapp_message":
+            phone = contact.phone
+            if phone:
+                return await get_whatsapp_connector().send_text_async(phone, business.message or "")
+            phones = [m for m in _resolve_group_members(contact) if m.startswith("+") or m.isdigit()]
+            if phones:
+                results = [await get_whatsapp_connector().send_text_async(p, business.message or "") for p in phones]
+                return _combine(results, "WhatsApp message")
+            return ActionResult.failure(
+                ActionCode.PHONE_UNAVAILABLE,
+                f'I found {contact.name}, but they don\'t have a WhatsApp number on file.',
+            )
+
+        email = contact.email
+        if email:
+            return await get_email_connector().send_async(email, business.subject or "", business.message or "")
+        members = _resolve_group_members(contact)
+        if members:
+            return await get_email_connector().send_async(members, business.subject or "", business.message or "")
+        return ActionResult.failure(
+            ActionCode.EMAIL_UNAVAILABLE,
+            f'I found {contact.name}, but they don\'t have an email address on file.',
+        )
+
+    return ActionResult.failure(ActionCode.INVALID_ACTION)
+
+
+async def run_business_action_async(
+    reply: str,
+    action_data: dict[str, Any] | None,
+) -> str:
+    """Async twin of :func:`run_business_action`."""
+    business = BusinessAction.from_dict(action_data)
+    if business is None:
+        return reply
+
+    result = await execute_action_async(business)
+    logger.info(
+        "Business action %s -> %s (success=%s)",
+        business.action,
+        result.code.value,
+        result.success,
+    )
+
+    ack = (reply or "").strip()
+    return f"{ack} {result.message}".strip() if ack else result.message
+
+
 def run_business_action(
     reply: str,
     action_data: dict[str, Any] | None,

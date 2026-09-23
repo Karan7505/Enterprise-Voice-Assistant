@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -13,7 +14,7 @@ class NoKeyFallbackTests(unittest.TestCase):
         # Simulate a deployment where no LLM key is set.
         with patch.object(chat_api, "active_llm", []):
             with self.assertRaises(Exception) as ctx:
-                chat(ChatRequest(message="hi", response_mode="text"), user=FAKE_USER)
+                asyncio.run(chat(ChatRequest(message="hi", response_mode="text"), user=FAKE_USER))
         exc = ctx.exception
         self.assertEqual(getattr(exc, "status_code", None), 503)
         detail = getattr(exc, "detail", "")
@@ -24,7 +25,9 @@ class NoKeyFallbackTests(unittest.TestCase):
         with patch.object(chat_api, "active_llm", ["OpenRouter (model)"]):
             with patch.object(chat_api, "process_message", return_value="Hello") as pm, \
                  patch.object(chat_api, "get_all_memories", return_value={}):
-                response = chat(ChatRequest(message="hi", response_mode="text"), user=FAKE_USER)
+                response = asyncio.run(
+                    chat(ChatRequest(message="hi", response_mode="text"), user=FAKE_USER)
+                )
         self.assertEqual(response.reply, "Hello")
         self.assertEqual(response.audio_url, "")
         pm.assert_called_once_with("hi", "user:1", mode="text")
