@@ -47,7 +47,7 @@ def register_user(username: str, password: str) -> dict:
     conn = get_connection()
     try:
         existing = conn.execute(
-            "SELECT id FROM users WHERE username = ? COLLATE NOCASE",
+            "SELECT id FROM users WHERE lower(username) = lower(?)",
             (username,),
         ).fetchone()
         if existing:
@@ -55,12 +55,13 @@ def register_user(username: str, password: str) -> dict:
 
         salt = secrets.token_bytes(SALT_BYTES)
         password_hash = _hash_password(password, salt)
-        cursor = conn.execute(
-            "INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)",
+        row = conn.execute(
+            "INSERT INTO users (username, password_hash, salt) "
+            "VALUES (?, ?, ?) RETURNING id",
             (username, password_hash, salt.hex()),
-        )
+        ).fetchone()
         conn.commit()
-        return {"id": cursor.lastrowid, "username": username}
+        return {"id": row["id"], "username": username}
     finally:
         conn.close()
 
@@ -70,7 +71,8 @@ def authenticate(username: str, password: str) -> str | None:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT id, password_hash, salt FROM users WHERE username = ? COLLATE NOCASE",
+            "SELECT id, password_hash, salt FROM users "
+            "WHERE lower(username) = lower(?)",
             ((username or "").strip(),),
         ).fetchone()
         if not row or not _verify_password(password, bytes.fromhex(row["salt"]), row["password_hash"]):
@@ -109,10 +111,18 @@ def resolve_user(token: str) -> dict | None:
             return None
 
         # Reject expired sessions. Rows created before expiry existed have a
-        # NULL expires_at and are accepted (graceful upgrade path).
-        if row["expires_at"]:
-            try:
-                expiry = datetime.fromisoformat(row["expires_at"])
+        # NULL expires_at and are accepted (graceful upgrade path). The column
+        # comes back as a datetime (PostgreSQL TIMESTAMPTZ) or, on older rows,
+        # an ISO string — both are normalized here.
+        raw_expiry = row["expires_at"]
+        if raw_expiry is not None:
+            expiry = raw_expiry
+            if isinstance(expiry, str):
+                try:
+                    expiry = datetime.fromisoformat(expiry)
+                except ValueError:
+                    expiry = None
+            if expiry is not None:
                 if expiry.tzinfo is None:
                     expiry = expiry.replace(tzinfo=timezone.utc)
                 if datetime.now(timezone.utc) >= expiry:
@@ -121,8 +131,6 @@ def resolve_user(token: str) -> dict | None:
                     )
                     conn.commit()
                     return None
-            except ValueError:
-                pass
 
         return {
             "user_id": row["user_id"],

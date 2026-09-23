@@ -1,11 +1,10 @@
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from pydantic import ValidationError
 
+from pg_test_support import TestDatabase
 from app.api.chat import ChatRequest
 from app.core import database
 from app.core.config import settings
@@ -44,16 +43,13 @@ ACTION = {"action": "whatsapp_message", "recipient": "Rahul", "message": "Meetin
 
 class SecurityControlTests(unittest.TestCase):
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self._orig_db = database.DB_PATH
-        database.DB_PATH = Path(self._tmp.name) / "test.db"
-        database.initialize_database()
+        self._db = TestDatabase()
+        self._db.start()
         session_service._sessions.clear()
 
     def tearDown(self):
         session_service._sessions.clear()
-        database.DB_PATH = self._orig_db
-        self._tmp.cleanup()
+        self._db.stop()
 
     def _register(self, username="alice", password="password123"):
         return auth_service.register_user(username, password)

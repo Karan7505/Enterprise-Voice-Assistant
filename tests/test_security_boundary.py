@@ -14,11 +14,10 @@ called and nothing real is sent:
 """
 
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from pg_test_support import TestDatabase
 from app.api.chat import _own_audio_file
 from app.connectors import orchestrator
 from app.connectors.base import ActionResult
@@ -56,16 +55,13 @@ RAHUL = Contact(name="Rahul", phone="+919812345678")
 
 class _BaseBoundary(unittest.TestCase):
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self._orig_db = database.DB_PATH
-        database.DB_PATH = Path(self._tmp.name) / "test.db"
-        database.initialize_database()
+        self._db = TestDatabase()
+        self._db.start()
         session_service._sessions.clear()
 
     def tearDown(self):
         session_service._sessions.clear()
-        database.DB_PATH = self._orig_db
-        self._tmp.cleanup()
+        self._db.stop()
 
     def _register(self, username, password="password123"):
         return auth_service.register_user(username, password)
@@ -196,7 +192,8 @@ class IDORIsolationTest(_BaseBoundary):
         name = "a" * 32 + ".mp3"
         conn = database.get_connection()
         conn.execute(
-            "INSERT OR REPLACE INTO audio_files (filename, session_id) VALUES (?, ?)",
+            "INSERT INTO audio_files (filename, session_id) VALUES (?, ?) "
+            "ON CONFLICT (filename) DO UPDATE SET session_id = excluded.session_id",
             (name, sid_a),
         )
         conn.commit()

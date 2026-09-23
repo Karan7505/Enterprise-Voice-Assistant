@@ -138,8 +138,11 @@ def store_pending_action(session_id: str, action_data: dict) -> None:
         conn = get_connection()
         try:
             conn.execute(
-                "INSERT OR REPLACE INTO pending_actions "
-                "(session_id, action_json, created_at) VALUES (?, ?, ?)",
+                "INSERT INTO pending_actions "
+                "(session_id, action_json, created_at) VALUES (?, ?, ?) "
+                "ON CONFLICT (session_id) DO UPDATE SET "
+                "action_json = excluded.action_json, "
+                "created_at = excluded.created_at",
                 (session_id, json.dumps(action_data), time.time()),
             )
             conn.commit()

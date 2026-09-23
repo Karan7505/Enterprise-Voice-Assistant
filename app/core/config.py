@@ -285,6 +285,13 @@ class Settings:
     DATABASE_PATH: str = clean_str(os.getenv("DATABASE_PATH"), "assistant.db")
     AUDIO_DIR: str = clean_str(os.getenv("AUDIO_DIR"), "audio")
 
+    # PostgreSQL connection string (see app/core/database.py). The default is
+    # the local development/staging instance; every deployment sets this.
+    DATABASE_URL: str = clean_str(
+        os.getenv("DATABASE_URL"),
+        "postgresql://evoa@127.0.0.1:5432/assistant",
+    )
+
 
 settings = Settings()
 

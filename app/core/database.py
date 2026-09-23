@@ -1,155 +1,152 @@
-import sqlite3
-from pathlib import Path
+"""PostgreSQL persistence layer.
+
+All access goes through :func:`get_connection`, which hands out a small proxy
+around a pooled ``psycopg2`` connection. The proxy preserves the historical
+call style of the service layer — ``conn.execute(sql, params)`` with ``?``
+placeholders, ``row["column"]`` access, and ``commit()`` / ``close()`` — so
+queries read the same as they did on the previous storage backend.
+
+The schema is owned by Alembic (see ``alembic/``). :func:`initialize_database`
+creates the pool and upgrades the schema to head, which is idempotent and safe
+to call on every process start.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+from typing import Any
+
+import psycopg2
+import psycopg2.extras
+from psycopg2.pool import ThreadedConnectionPool
 
 from app.core.config import settings
 
-DB_PATH = Path(settings.DATABASE_PATH).resolve()
+logger = logging.getLogger(__name__)
+
+DEFAULT_DATABASE_URL = "postgresql://evoa@127.0.0.1:5432/assistant"
+
+_pool: ThreadedConnectionPool | None = None
 
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+def database_url() -> str:
+    """Connection string: ``DATABASE_URL`` env wins over the settings default.
+
+    Read at call time (not import time) so tests can point the app at a fresh
+    per-test database by setting the environment variable.
+    """
+    return os.environ.get("DATABASE_URL") or settings.DATABASE_URL
 
 
-def initialize_database():
-    conn = get_connection()
+def _translate(sql: str, params: tuple[Any, ...]) -> str:
+    """Translate ``?`` placeholders to the driver's ``%s`` form.
 
-    # Messages table
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    Fails loudly if the placeholder count and the parameter count disagree,
+    so a mismatched query cannot silently bind the wrong arguments.
+    """
+    question_marks = sql.count("?")
+    if question_marks != len(params):
+        raise ValueError(
+            f"placeholder/parameter mismatch: {question_marks} '?' vs {len(params)} params"
         )
-        """
-    )
+    return re.sub(r"\?", "%s", sql)
 
-    # Memories table
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS memories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            memory_key TEXT NOT NULL,
-            memory_value TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(session_id, memory_key)
-        )
-        """
-    )
 
-    # Users table (authentication + user separation)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
+class _Cursor:
+    """Thin wrapper so callers keep using ``fetchone``/``fetchall``."""
 
-    # Server sessions (opaque bearer tokens, one per login)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS auth_sessions (
-            token TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP NULL,
-            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-        )
-        """
-    )
+    def __init__(self, cursor: psycopg2.extras.RealDictCursor) -> None:
+        self._cursor = cursor
 
-    # Ownership of generated TTS files so /audio stays per-user.
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS audio_files (
-            filename TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
+    def fetchone(self):
+        return self._cursor.fetchone()
 
-    # Fixed-window rate-limit counters (auth by IP, chat by user, sends by user).
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS rate_limit_buckets (
-            key TEXT PRIMARY KEY,
-            window_start INTEGER NOT NULL,
-            count INTEGER NOT NULL DEFAULT 1
-        )
-        """
-    )
+    def fetchall(self):
+        return self._cursor.fetchall()
 
-    # Audit trail for outbound business actions (who sent what to whom, outcome).
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS action_audit (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            username TEXT,
-            channel TEXT,
-            recipient TEXT,
-            subject TEXT,
-            message_sha1 TEXT,
-            outcome TEXT,
-            detail TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
 
-    # A business action staged for explicit confirm/cancel, one per session.
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS pending_actions (
-            session_id TEXT PRIMARY KEY,
-            action_json TEXT NOT NULL,
-            created_at REAL NOT NULL
-        )
-        """
-    )
+class _Connection:
+    """Pool-backed stand-in for the old per-call connection."""
 
-    # Backfill expires_at for databases created before session expiry existed.
-    session_columns = [
-        row["name"]
-        for row in conn.execute("PRAGMA table_info(auth_sessions)").fetchall()
-    ]
-    if "expires_at" not in session_columns:
-        conn.execute("ALTER TABLE auth_sessions ADD COLUMN expires_at TIMESTAMP NULL")
+    def __init__(self, conn: psycopg2.extensions.connection) -> None:
+        self._conn = conn
 
-    # Add session_id if upgrading an existing messages table
-    columns = [
-        row["name"]
-        for row in conn.execute("PRAGMA table_info(messages)").fetchall()
-    ]
+    def execute(self, sql: str, params: tuple[Any, ...] | None = None) -> _Cursor:
+        params = params or ()
+        cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cursor.execute(_translate(sql, params), params)
+        except Exception:
+            cursor.close()
+            raise
+        return _Cursor(cursor)
 
-    if "session_id" not in columns:
-        conn.execute(
-            """
-            ALTER TABLE messages
-            ADD COLUMN session_id TEXT DEFAULT 'default'
-            """
-        )
+    def commit(self) -> None:
+        self._conn.commit()
 
-    if "mode" not in columns:
-        conn.execute(
-            """
-            ALTER TABLE messages
-            ADD COLUMN mode TEXT DEFAULT 'text'
-            """
-        )
+    def close(self) -> None:
+        # Return the connection to the pool; a connection left in a failed
+        # transaction state is discarded instead of recycled.
+        if self._conn.closed:
+            if _pool is not None:
+                _pool.putconn(self._conn, close=True)
+            return
+        try:
+            self._conn.rollback()
+        except psycopg2.Error:
+            _pool.putconn(self._conn, close=True)
+            return
+        _pool.putconn(self._conn)
 
-    conn.commit()
-    conn.close()
+
+def get_connection() -> _Connection:
+    global _pool
+    if _pool is None:
+        initialize_database()
+    return _Connection(_pool.getconn())
+
+
+def initialize_database() -> None:
+    """Create the pool and ensure the schema is at the latest revision."""
+    global _pool
+    if _pool is not None:
+        _pool.closeall()
+        _pool = None
+
+    url = database_url()
+    _pool = ThreadedConnectionPool(minconn=2, maxconn=20, dsn=url)
+
+    # Idempotent schema upgrade (no-op when the DB is already at head).
+    _run_migrations(url)
+
+
+def close_pool() -> None:
+    global _pool
+    if _pool is not None:
+        _pool.closeall()
+        _pool = None
+
+
+def _run_migrations(url: str) -> None:
+    from alembic import command
+    from alembic.config import Config
+
+    config = Config(str(_alembic_ini_path()))
+    # alembic/env.py reads DATABASE_URL from the process environment.
+    previous = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = url
+    try:
+        command.upgrade(config, "head")
+    finally:
+        if previous is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous
+
+
+def _alembic_ini_path():
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[2] / "alembic.ini"

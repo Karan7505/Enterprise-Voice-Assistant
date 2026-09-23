@@ -60,7 +60,8 @@ def _record_audio_file(filename: str, session_id: str) -> None:
     conn = get_connection()
     try:
         conn.execute(
-            "INSERT OR REPLACE INTO audio_files (filename, session_id) VALUES (?, ?)",
+            "INSERT INTO audio_files (filename, session_id) VALUES (?, ?) "
+            "ON CONFLICT (filename) DO UPDATE SET session_id = excluded.session_id",
             (filename, session_id),
         )
         conn.commit()

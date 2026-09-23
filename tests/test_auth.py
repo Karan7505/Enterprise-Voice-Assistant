@@ -1,22 +1,18 @@
-import tempfile
 import unittest
 
-from app.core import database
+from pg_test_support import TestDatabase
 from app.services import auth_service
 from app.services import memory_service, database_chat_history
 
 
 class AuthTests(unittest.TestCase):
     def setUp(self):
-        # Isolate each test run on its own database file.
-        self._tmp = tempfile.TemporaryDirectory()
-        self._orig_db_path = database.DB_PATH
-        database.DB_PATH = database.Path(self._tmp.name) / "test.db"
-        database.initialize_database()
+        # Isolate each test run on its own fresh PostgreSQL database.
+        self._db = TestDatabase()
+        self._db.start()
 
     def tearDown(self):
-        database.DB_PATH = self._orig_db_path
-        self._tmp.cleanup()
+        self._db.stop()
 
     # --- basic lifecycle ---------------------------------------------------
     def test_register_login_me_logout(self):

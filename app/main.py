@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.core.config import settings
-from app.core.database import initialize_database
+from app.core.database import close_pool, initialize_database
 from app.services.tts_service import cleanup_old_audio_files, ensure_audio_directory
 
 
@@ -16,6 +16,7 @@ async def lifespan(_: FastAPI):
     ensure_audio_directory()
     cleanup_old_audio_files()
     yield
+    close_pool()
 
 
 app = FastAPI(lifespan=lifespan)
