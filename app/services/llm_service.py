@@ -64,7 +64,7 @@ async def generate_with_openrouter(prompt: str) -> str:
     last_err: Exception | None = None
 
     client = AsyncOpenAI(
-        base_url="https://openrouter.ai/api/v1",
+        base_url=settings.OPENROUTER_BASE_URL,
         api_key=key,
         timeout=settings.LLM_TIMEOUT_SECONDS,
         default_headers={
@@ -92,7 +92,7 @@ async def generate_with_openrouter(prompt: str) -> str:
 async def generate_with_nvidia(prompt: str) -> str:
     key = settings.NVIDIA_API_KEY
     client = AsyncOpenAI(
-        base_url="https://integrate.api.nvidia.com/v1",
+        base_url=settings.NVIDIA_BASE_URL,
         api_key=key,
         timeout=settings.LLM_TIMEOUT_SECONDS,
     )

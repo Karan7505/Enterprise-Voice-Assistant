@@ -77,7 +77,23 @@ class _Connection:
         params = params or ()
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         try:
-            cursor.execute(_translate(sql, params), params)
+            if os.environ.get("LOG_DB_TIMINGS") == "1":
+                # Load-test instrumentation: per-query duration only (never
+                # parameter values, which may contain user content). Uses a
+                # structlog logger (kwargs -> JSON fields), not the stdlib one.
+                import time
+
+                from app.core.logging_conf import get_logger
+
+                start = time.perf_counter()
+                cursor.execute(_translate(sql, params), params)
+                get_logger(__name__).info(
+                    "db_query",
+                    duration_ms=round((time.perf_counter() - start) * 1000, 3),
+                    query=sql.strip().splitlines()[0][:48],
+                )
+            else:
+                cursor.execute(_translate(sql, params), params)
         except Exception:
             cursor.close()
             raise
@@ -116,7 +132,9 @@ def initialize_database() -> None:
         _pool = None
 
     url = database_url()
-    _pool = ThreadedConnectionPool(minconn=2, maxconn=20, dsn=url)
+    _pool = ThreadedConnectionPool(
+        minconn=settings.PG_POOL_MIN, maxconn=settings.PG_POOL_MAX, dsn=url
+    )
 
     # Idempotent schema upgrade (no-op when the DB is already at head).
     _run_migrations(url)

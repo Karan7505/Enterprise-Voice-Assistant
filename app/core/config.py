@@ -291,6 +291,14 @@ class Settings:
         os.getenv("DATABASE_URL"),
         "postgresql://evoa@127.0.0.1:5432/assistant",
     )
+    # The pool is pre-sized: psycopg2's ThreadedConnectionPool closes returned
+    # connections once the idle pool holds >= minconn, so a small minconn
+    # (e.g. 2) degenerates into connect-per-burst churn — each new connection
+    # is created while holding the pool lock, serializing all concurrent
+    # DB work. minconn == maxconn keeps a stable, pre-warmed set of
+    # connections.
+    PG_POOL_MIN: int = clean_int(os.getenv("PG_POOL_MIN"), default=20, minimum=1)
+    PG_POOL_MAX: int = clean_int(os.getenv("PG_POOL_MAX"), default=20, minimum=1)
     # Redis connection string: shared session state + atomic rate limiting
     # (see app/core/redis_client.py). Local default; deployments set this.
     REDIS_URL: str = clean_str(
@@ -314,6 +322,15 @@ class Settings:
     # Local-staging placeholders; deployments inject real credentials.
     S3_ACCESS_KEY: str = clean_str(os.getenv("S3_ACCESS_KEY"), "evoa-local")
     S3_SECRET_KEY: str = clean_str(os.getenv("S3_SECRET_KEY"), "evoa-local-secret")
+
+    # Provider endpoint overrides (production URLs by default; staging/load
+    # tests point these at local stub servers).
+    OPENROUTER_BASE_URL: str = clean_str(
+        os.getenv("OPENROUTER_BASE_URL"), "https://openrouter.ai/api/v1"
+    )
+    NVIDIA_BASE_URL: str = clean_str(
+        os.getenv("NVIDIA_BASE_URL"), "https://integrate.api.nvidia.com/v1"
+    )
 
     # Provider resilience (blueprint Change 5): per-provider timeboxes,
     # retry budgets, and circuit-breaker trip/reset thresholds.

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import logging
 import os
-from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
@@ -12,8 +12,11 @@ from app.core.config import settings  # noqa: F401  (loads the project .env firs
 
 config = context.config
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# Deliberately NOT calling fileConfig(config.config_file_name) here: the
+# stock alembic.ini [loggers] section would reset the process-wide root
+# logger (level + handlers), clobbering the application's structured-logging
+# setup at startup. Alembic's own records flow through the app's root logger.
+logging.getLogger("alembic").setLevel(logging.INFO)
 
 
 def _url() -> str:
