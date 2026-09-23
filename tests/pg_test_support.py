@@ -34,19 +34,15 @@ def _url_for_db(url: str, dbname: str) -> str:
 
 
 def _wipe_s3() -> None:
-    """Reset the S3 audio store for a test (only when S3 mode is selected).
-
-    An explicitly empty ``S3_ENDPOINT_URL`` runs the suite in local-FS mode
-    (CI), where this is a no-op.
-    """
-    import os
+    """Reset the S3 audio store for a test (no-op in S3_LOCAL_FS mode, which
+    CI uses so the suite needs no S3 target at all)."""
 
     import botocore.exceptions
 
     from app.core.config import settings
-    from app.core.s3_client import get_s3, s3_enabled
+    from app.core.s3_client import get_s3, local_fs_mode
 
-    if not s3_enabled():
+    if local_fs_mode():
         return
     s3 = get_s3()
     try:

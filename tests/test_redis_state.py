@@ -183,6 +183,14 @@ class RedisStateTests(unittest.TestCase):
         os.environ["REDIS_URL"] = DEAD_REDIS_URL
         redis_client.close_redis()
         try:
+            # Align to a bucket start: a 60 s fixed window rolls over every
+            # minute, and the 4 calls must land inside a single bucket.
+            import time as _t
+
+            to_next = 60 - (_t.time() % 60)
+            if to_next < 2:
+                _t.sleep(to_next + 0.05)
+
             # In-process fallback: bounded, still enforcing, never crashing.
             for i in range(3):
                 allowed, _ = check_rate_limit("down", f"unique-{id(self)}", 3, 60)

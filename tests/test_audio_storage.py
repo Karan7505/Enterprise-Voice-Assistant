@@ -92,10 +92,10 @@ class AudioStorageTests(unittest.TestCase):
 
     # --- local-FS mode ---------------------------------------------------------
     def test_local_fs_mode_keeps_files(self):
-        os.environ["S3_ENDPOINT_URL"] = ""
+        os.environ["S3_LOCAL_FS"] = "1"
         close_s3()
         try:
-            self.assertFalse(s3_enabled())
+            self.assertEqual(audio_storage.audio_mode(), "local")
             filename, path = self._write_local(b"local-bytes")
             try:
                 store_audio("user:9", filename, path)  # no-op in local mode
@@ -108,7 +108,7 @@ class AudioStorageTests(unittest.TestCase):
             finally:
                 path.unlink(missing_ok=True)
         finally:
-            os.environ.pop("S3_ENDPOINT_URL", None)
+            os.environ.pop("S3_LOCAL_FS", None)
             close_s3()
 
 

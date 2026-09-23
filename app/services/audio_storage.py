@@ -2,8 +2,11 @@
 
 Generated speech is written to a local temp file by the TTS providers, then
 handed to :func:`store_audio`, which persists it in the audio store. In S3
-mode the object lives under a per-user key (``user-{id}/{filename}``) in the
-configured bucket; the database (``audio_files``) stays the ownership record.
+mode (the default — real AWS S3, or an S3-compatible endpoint via
+``S3_ENDPOINT_URL``) the object lives under a per-user key
+(``user-{id}/{filename}``) in the configured bucket; the database
+(``audio_files``) stays the ownership record. ``S3_LOCAL_FS=1`` switches to
+keyless local-filesystem mode for development/CI.
 
 Failure semantics (blueprint Change 4): when S3 is the selected store and it
 is unreachable, storage/streaming raises :class:`AudioStoreError` and the API
@@ -19,7 +22,7 @@ from pathlib import Path
 import botocore.exceptions
 
 from app.core.config import settings
-from app.core.s3_client import get_s3, s3_enabled
+from app.core.s3_client import get_s3, local_fs_mode
 from app.services.tts_service import AUDIO_DIR
 
 logger = logging.getLogger(__name__)
@@ -30,7 +33,7 @@ class AudioStoreError(Exception):
 
 
 def audio_mode() -> str:
-    return "s3" if s3_enabled() else "local"
+    return "local" if local_fs_mode() else "s3"
 
 
 def _user_prefix(session_id: str) -> str:

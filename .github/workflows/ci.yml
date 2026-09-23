@@ -35,6 +35,9 @@ jobs:
       DATABASE_URL: postgresql://assistant:assistant-ci@localhost:5432/assistant_ci
       # Tests create one fresh database per case; point at the CI admin DB.
       PG_ADMIN_URL: postgresql://assistant:assistant-ci@localhost:5432/postgres
+      # CI has no S3 target: audio tests use the keyless local-FS mode and
+      # the per-test S3 wipe is a no-op.
+      S3_LOCAL_FS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

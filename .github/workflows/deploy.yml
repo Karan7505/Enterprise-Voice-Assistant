@@ -1,0 +1,107 @@
+name: Deploy
+
+# Runs after CI passes for the same commit, or manually. Credentials are
+# injected at runtime via GitHub OIDC (no long-lived AWS keys in the repo):
+#   1. Create an IAM role trusted by the GitHub OIDC provider
+#      (https://github.com/{owner}/{repo}/settings/connections/actions)
+#      restricted to this repository, with a policy allowing:
+#        ecr:BatchCheckLayerAvailability | GetDownloadUrlForLayer | PutImage
+#        ecr:GetAuthorizationToken
+#        ecs:DescribeTaskDefinition | RegisterTaskDefinition | UpdateService
+#        ecs:DescribeServices | DescribeTasks
+#        logs:CreateLogStream | PutLogEvents | DescribeLogStreams
+#   2. Repository secrets:  AWS_ROLE_ARN, AWS_REGION
+#   3. Repository variables: ECS_CLUSTER, ECS_TASK_FAMILY, ECS_SERVICE,
+#      ECR_REPOSITORY  (all outputs of infra/ — see infra/README.md)
+#
+# The pipeline does NOT store or read any application credentials: the task
+# definition (managed by Terraform) injects them at runtime from the AWS
+# Secrets Manager secret + the ECS task role.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    type: completed
+    branches: [master, main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For workflow_run, check out the exact commit CI validated.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - name: AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          ECR: ${{ steps.ecr.outputs.registry }}
+          REPO: ${{ vars.ECR_REPOSITORY }}
+          SHA: ${{ github.sha }}
+        run: |
+          docker build -f deploy/Dockerfile -t "$ECR/$REPO:$SHA" .
+          docker push "$ECR/$REPO:$SHA"
+
+      - name: Register task definition revision (image swap only)
+        id: task
+        env:
+          ECR: ${{ steps.ecr.outputs.registry }}
+          REPO: ${{ vars.ECR_REPOSITORY }}
+          SHA: ${{ github.sha }}
+          FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+        run: |
+          aws ecs describe-task-definition --family "$FAMILY" \
+            --query 'taskDefinition' > td.json
+          # Replace the image in every container; keep all runtime config
+          # (CPU/mem, env, secret references, task role) from the Terraform
+          # -managed base revision.
+          python - <<'PY'
+          import json, os
+          td = json.load(open("td.json"))
+          image = f"{os.environ['ECR']}/{os.environ['REPO']}:{os.environ['SHA']}"
+          for c in td["containerDefinitions"]:
+              c["image"] = image
+          json.dump(td, open("td-new.json", "w"), indent=2)
+          PY
+          aws ecs register-task-definition --cli-input-json file://td-new.json \
+            --query 'taskDefinition.taskDefinitionArn' > td-arn.txt
+          echo "arn=$(cat td-arn.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Rolling update
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          SERVICE: ${{ vars.ECS_SERVICE }}
+          TASK_ARN: ${{ steps.task.outputs.arn }}
+        run: |
+          aws ecs update-service \
+            --cluster "$CLUSTER" \
+            --service "$SERVICE" \
+            --task-definition "$TASK_ARN" \
+            --force-new-deployment
+
+      - name: Wait for service stability
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+          SERVICE: ${{ vars.ECS_SERVICE }}
+        run: |
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          echo "Deploy complete: ${{ github.sha }}"

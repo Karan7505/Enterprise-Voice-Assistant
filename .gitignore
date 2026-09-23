@@ -15,7 +15,11 @@ venv/
 env/
 
 # --- Environment variables (never commit real keys) ---
+# Ignore every .env file EXCEPT the committed examples.
 .env
+.env.*
+!.env.example
+!.env.production.example
 
 # --- SQLite database (auto-created at runtime) ---
 assistant.db
@@ -51,3 +55,11 @@ Thumbs.db
 *.log
 *.bak
 .uv-cache/
+
+# --- Terraform (state must never be committed) ---
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfvars
+infra/terraform.tfvars.json
+!infra/terraform.tfvars.example
